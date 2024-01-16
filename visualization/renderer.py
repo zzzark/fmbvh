@@ -11,12 +11,12 @@ class _CallbackContainer:
 
 
 class O3DRenderer:
-    def __init__(self, left=400, top=300, width=800, height=600):
+    def __init__(self, left=400, top=300, width=1600, height=1200):
         self.vis = o3d.visualization.VisualizerWithKeyCallback()
         self.vis.create_window(width=width, height=height, left=left, top=top)
         self.geometries_set = {}
 
-    def create_window(self, left=400, top=300, width=800, height=600):
+    def create_window(self, left=400, top=300, width=1600, height=1200):
         self.vis.destroy_window()
         self.vis = o3d.visualization.VisualizerWithKeyCallback()
         self.vis.create_window(width=width, height=height, left=left, top=top)

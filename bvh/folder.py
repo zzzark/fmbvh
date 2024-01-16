@@ -3,7 +3,7 @@ gather all the *.bvh files and load them into memory as BVH objects
 """
 
 import os
-import fmbvh.bvh as bvh
+from .. import bvh
 import glob
 
 

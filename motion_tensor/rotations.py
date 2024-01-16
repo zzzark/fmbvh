@@ -491,6 +491,67 @@ def matrix_to_rotation_6d(matrix: torch.Tensor) -> torch.Tensor:
     return matrix[..., :2, :, :].clone().reshape(*matrix.size()[:-3], 6, -1)
 
 
+def slerp(q1, q2, t):
+    """
+    :param q1, q2: Unit quaternions, [J, 4, F]
+    :param t: Interpolation parameter (between 0 and 1)
+    :returns: Interpolated quaternion
+    """
+    J, _, F = q1.shape
+    dot_product = (q1 * q2).sum(dim=-2, keepdim=True)
+    dot_product = torch.broadcast_to(dot_product, (J, 4, F)).clone()
+
+    less_than_zero = (dot_product < 0.0)
+    q1[less_than_zero] = -q1[less_than_zero]
+    dot_product[less_than_zero] = -dot_product[less_than_zero]
+
+    # WARNING: GRADIENT EXPLOSION
+    eps = 0  # 1e-8
+    dot_product = torch.clamp(dot_product, -1+eps, 1-eps)  # Ensure dot product is in range [-1, 1]
+
+    theta_0 = torch.arccos(dot_product)  # Angle between quaternions
+    sin_theta = torch.sin(theta_0)
+
+    # if sin_theta == 0.0:
+    #     return q1  # Quaternions are already aligned
+
+    # WARNING: CHECK FOR INF / NAN
+    weight_q1 = torch.sin((1 - t) * theta_0) / sin_theta
+    weight_q2 = torch.sin(t * theta_0) / sin_theta
+
+    weight_q1[sin_theta == 0.0] = 1.0
+    weight_q2[sin_theta == 0.0] = 0.0
+
+    return (weight_q1 * q1) + (weight_q2 * q2)
+
+    # def test_slerp():
+    #     a = torch.tensor((1, 0, 0, 0)).view(1, 4, 1)#.broadcast_to(2, 4, 3)
+    #     b = torch.tensor((0, 1, 0, 0)).view(1, 4, 1)#.broadcast_to(2, 4, 3)
+    #     print(slerp(a, b, 0.0))
+    #     print(slerp(a, b, 0.2))
+    #     print(slerp(a, b, 0.4))
+    #     print(slerp(a, b, 0.6))
+    #     print(slerp(a, b, 0.8))
+    #     print(slerp(a, b, 1.0))
+
+
+def slerp_n(*q):
+    """
+    slerp n quaternions (with the same weights)
+    :param q: 
+    :return: 
+    """
+    if len(q) == 0:
+        raise ValueError("No quaternion input.")
+    elif len(q) == 1:
+        return q[0]
+    elif len(q) == 2:
+        return slerp(q[0], q[1], 0.5)
+    else:
+        N = len(q)
+        return slerp(q[0], slerp_n(*q[1:]), 1/N)
+
+
 # def matrix_to_quaternion(matrix):
 #     """
 #     Convert rotations given as rotation matrices to quaternions.

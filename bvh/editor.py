@@ -1,9 +1,9 @@
-from fmbvh.bvh.parser import BVH, JointOffset, JointMotion
+from .parser import BVH, JointOffset, JointMotion
 import itertools
 from copy import deepcopy
 import torch
-import fmbvh.motion_tensor.rotations as mor
-import fmbvh.motion_tensor.bvh_casting as bvc
+from ..motion_tensor import rotations as mor
+from ..motion_tensor import bvh_casting as bvc
 
 
 def reorder_bvh(obj: BVH):

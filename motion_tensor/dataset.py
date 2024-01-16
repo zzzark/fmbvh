@@ -3,7 +3,7 @@
 @desc: this script provides tools for creating and loading motion dataset
 """
 
-import fmbvh.bvh as bvh
+from .. import bvh
 import os
 import json
 import torch
@@ -11,8 +11,8 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Tuple, List, Any, Type
 
-import fmbvh.motion_tensor.motion_process as mop
-import fmbvh.motion_tensor.bvh_casting as casting
+import motion_process as mop
+import bvh_casting as casting
 
 
 class BVHDataExtractor:

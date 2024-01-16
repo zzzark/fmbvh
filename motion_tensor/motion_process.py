@@ -3,7 +3,7 @@
 
 import torch
 import torch.nn.functional as F
-import fmbvh.motion_tensor as mot
+from .. import motion_tensor as mot
 
 
 def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sampler='nearest'):

@@ -1,6 +1,6 @@
 import torch
-import fmbvh.bvh as bvh
-import fmbvh.motion_tensor as mot
+from .. import bvh
+from .. import motion_tensor as mot
 from typing import Tuple
 
 

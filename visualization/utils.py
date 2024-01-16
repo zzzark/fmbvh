@@ -1,10 +1,16 @@
+import torch
+
 from motion_tensor.rotations import quaternion_to_matrix as q2m
 from motion_tensor.kinematics import forward_kinematics as fk
 from visualization.visualize_motion import MoVisualizer
 
 
-def quick_visualize_fk(p_index, off, qua, scale=200.0):
-    if len(qua.shape) == 4:
+def quick_visualize_fk(p_index, off, qua, trans, scale=200.0):
+    """
+    off: [J, 3, 1]
+    qua: [J, 4, F]
+    """
+    if len(qua.shape) == 4: # remove batch
         off = off[0]
         qua = qua[0]
 
@@ -21,7 +27,7 @@ def quick_visualize_fk(p_index, off, qua, scale=200.0):
     off = off.detach().cpu()
     qua = qua.detach().cpu()
     mat = q2m(qua)
-    pos = fk(p_index, mat, None, off, True, False)
+    pos = fk(p_index, mat, None, off, True, False) + trans
 
     def _next():
         f = 0
@@ -37,11 +43,12 @@ def quick_visualize(p_index, pos, scale=200.0, callback_fn=None):
     """
     pos: [J, 3, F]
     """
-    if len(pos.shape) == 4:
+    if len(pos.shape) == 4:  # remove batch
         pos = pos[0]
 
     assert pos.shape[1] == 3
-    pos = pos.detach().cpu()
+    if isinstance(pos, torch.Tensor):
+        pos = pos.detach().cpu()
 
     def _next():
         f = 0
