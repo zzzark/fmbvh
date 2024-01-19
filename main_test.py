@@ -5,11 +5,11 @@ from motion_tensor.rotations import pad_position_to_quaternion as pad
 from motion_tensor.rotations import mul_two_quaternions as mul
 from motion_tensor.rotations import inverse_quaternion as inv
 from motion_tensor.rotations import conjugate_quaternion as cnjc
-from motion_tensor.rotations import normalize_quaternion as norm
+from motion_tensor.rotations import normalize_vector as norm
 from motion_tensor.rotations import quaternion_to_matrix as q2m
 from motion_tensor.rotations import norm_of_quaternion as nof
 from motion_tensor.rotations import euler_to_quaternion as e2q
-from motion_tensor.rotations import slerp_n
+from motion_tensor.rotations import get_quat_from_pos
 
 
 import json
@@ -57,67 +57,7 @@ def to_th(*x):
     return tuple([torch.from_numpy(e) for e in x]) if len(x) > 1 else torch.from_numpy(x[0])
 
 
-def rotate_at(q, p, indices=None):
-    """
-    :param q: [J, 4, F]
-    :param p: [J, 3, F]
-    :param indices: index, int or array
-    :return: [J, 3, F]
-    """
-    if isinstance(indices, int):
-        indices = [indices]
-    elif indices is None:
-        indices = slice(None, None, None)
-    p = p.clone()
-    old_p = p
-    p = pad(p[indices])
-    r = mul(q, mul(p, inv(q)))
-    r = r[:, 1:, :]
-
-    old_p[indices] = r
-    return old_p
-
-
-def get_children(p_index, cur_index) -> list:
-    """
-    get kinematic chain (all children of cur_index excludes cur_index)
-    """
-    chain_list = {cur_index}
-    for c, p in enumerate(p_index):
-        if p in chain_list:
-            chain_list.add(c)
-    chain_list.remove(cur_index)
-    return list(chain_list)
-
-
-def get_rotation_at(offset, target, p_index, i):
-    """
-    :param p1: [J, 3, F]
-    :param p2: [J, 3, F]
-    :param p_index:
-    :param i:
-    :return: [1, 4, F]
-    """
-    children = [e for e in range(len(p_index)) if p_index[e] == i]
-
-    if len(children) == 0:
-        ret = torch.zeros(1, 4, target.shape[-1], dtype=target.dtype)
-        ret[:, 0, :] = 1.0
-        return ret
-
-    r_ls = []
-    for c in children:
-        a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
-        b = target[[c], :, :]
-
-        r = v2q(a, b)
-        r_ls.append(r)
-
-    r = slerp_n(*r_ls)
-    return r
-
-
-def main():
+def convert(input_path, output_path):
     t_json = """
     [[[0, 0, 0],
     [-0.0561437, -0.09454167, -0.02347454],
@@ -142,69 +82,96 @@ def main():
     [-0.2716039, 0.0256131, -0.000648317],
     [0.2633793, 2.866859E-05, -0.01182221]]]
     """
-
     p_index = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19]
-    # mirrored = [(1, 2), (4, 5), (7, 8), (10, 11), (13, 14), (16, 17), (18, 19), (20, 21)]
+    mirrored = [(1, 2), (4, 5), (7, 8), (10, 11), (13, 14), (16, 17), (18, 19), (20, 21)]
 
     # ------
-    with open("X:/all_pos.json", "r") as f:
+    with open(input_path, "r") as f:
         target = json.load(f)
     target = np.array(target).astype(float)
     target = np.transpose(target, (1, 2, 0))  # [F, J, 3] -> [J, 3, F]
     
-    # # ------ DEBUG DATA ------ #
+    # # ------ DEBUG ------ #
+    # # T-POSE
     # t_json = """
     # [[[0, 0, 0.0],
-    #   [1, 0, 0.0],
-    #   [1, 0, 0.0],
-    #   [1, 0, 0.0]]]
+    #   [1, 0, 0],
+    #   [0, 1, 0],
+    #   [0, 0, 1]]]
     # """
-    # p_index = [-1, 0, 1, 2]
+    # p_index = [-1, 0, 0, 0]
     # mirrored = []
+    # # TARGET
     # n_json = """
-    # [[[ 0, 0, 0],
+    # [[[ 0, 0, 0.0],
+    #   [ 0, 0, 1],
     #   [ 0, 1, 0],
-    #   [-1, 1, 0],
-    #   [-1, 0, 0]]]
+    #   [ 1, 0, 0]]]
     # """
-    # np_obj = json.loads(n_json)
-    # np_obj = np.array(np_obj).astype(float)
-    # np_obj = np.transpose(np_obj, (1, 2, 0))  # [F, J, 3] -> [J, 3, F]
+    # target = json.loads(n_json)
+    # target = np.array(target).astype(float)
+    # target = np.transpose(target, (1, 2, 0))  # [F, J, 3] -> [J, 3, F]
     # # ------ DEBUG ------ #
 
     offset = json.loads(t_json)
     offset = np.array(offset)  # [1, 22, 3]
     offset = np.transpose(offset, (1, 2, 0))  # [F, J, 3] -> [J, 3, F]
+
+    # # ------ DEBUG ------ #
+    # target = offset.copy()
+    # from scipy.spatial.transform import Rotation
+    # test_rotation = Rotation.from_euler("XYZ", [30, 60, 120], degrees=True)
+    # print(test_rotation.as_matrix())
+    # target = test_rotation.apply(target.transpose(0, 2, 1).reshape(-1, 3)).reshape(-1 , 1, 3).transpose(0, 2, 1)
+    # # ------ DEBUG ------ #
     
     # ------
     target, offset = to_th(target, offset)
 
-    # ---- FIXME: reverse x-axis ---- # 
+    # --- fix --- #
+    # offset[:, 0, :].neg_()
     target[:, 0, :].neg_()
+    # for ia, ib in mirrored:
+    #     target[[ia, ib]] = target[[ib, ia]]
+    # ----------- # 
 
-    target_trs = target[[0], :, :].clone()
-    target[:, :, :] -= target_trs
-
-    quick_visualize(p_index, target + target_trs, 2.0)
-
-    quas = []
-    for c, p in enumerate(p_index):
-        children = get_children(p_index, c)
-        if p >= 0:  # assert p_offset == (0, 0, 0)
-            target[children] -= offset[[c]]
-        q = get_rotation_at(offset, target, p_index, c)
-        target = rotate_at(inv(q), target, children)
-        quas.append(q)
+    ### DEBUG ###
+    target = target[:, :, :]
+    # target = offset.clone()
+    # for c, p in enumerate(p_index):
+    #     if p < 0: continue
+    #     target[c] += target[p]
+    # test_qua = torch.tensor([0.8785122, 0.2968829, 0.0704393, 0.3675801]).view(1, 4, 1)
+    # target = rotate_vector_with_quaternion(target, test_qua)
+    ### DEBUG ###
     
-    quas = torch.concatenate(quas, dim=0)
+    trans, quats = get_quat_from_pos(p_index, target, offset)
 
+    # target -= trans
+    # trans.zero_()
+    quick_visualize(p_index, target, 2.0)
+    quick_visualize_fk(p_index, offset, quats, trans, 2.0)
+
+    return
     # ---- to json ---- #
-    trans = target_trs[0].permute(1, 0).numpy()
-    quats = quas.permute(2, 0, 1).numpy()
-    np_array_to_json("X:/fwdq.txt", trans, quats, w_first=True)
-    # ----------------- # 
+    np_array_to_json(output_path, 
+                     trans[0].permute(1, 0).numpy(), 
+                     quats.permute(2, 0, 1).numpy(), 
+                     w_first=True)
+    # ----------------- #
 
-    quick_visualize_fk(p_index, offset, quas, target_trs, 2.0)
+
+def main():
+    import os 
+    from os.path import join as pj
+    
+    dirname = "F:/SIG24/selected_json"
+
+    for inp in os.listdir(dirname):
+        if inp.endswith(".pos"):
+            filename = os.path.basename(inp)
+            oup = pj(dirname, filename[:-4] + ".txt")
+            convert(pj(dirname, inp), oup)
 
 
 main()
