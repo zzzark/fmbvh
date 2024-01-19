@@ -310,19 +310,36 @@ def quaternion_to_euler_2(qua: torch.Tensor, order) -> torch.Tensor:
     return eul
 
 
+def normalize_vector(vec: torch.Tensor) -> torch.Tensor:
+    """
+    :param vec: [..., D, T]
+    :return: [..., D, T] normalized
+    """
+    return torch.nn.functional.normalize(vec, p=2, dim=-2)
+
+
 def normalize_quaternion(qua: torch.Tensor) -> torch.Tensor:
     """
-    euler rotation -> quaternion
-    :param qua: [(B), J, 4, T]
-    :return: [(B), J, 4, T]
+    :param qua: [..., 4, T]
+    :return: [..., 4, T] normalized
     """
-    batch, qua = (True, qua) if len(qua.shape) == 4 else (False, qua[None, ...])
+    assert qua.shape[-2] == 4
+    return normalize_vector(qua)
 
-    if len(qua.shape) != 4 or qua.shape[2] != 4:
-        raise ValueError('Input tensor should be in the shape of BxJx4xF.')
+    # --- legacy impl --- #
+    # """
+    # normalize quaternion
+    # :param qua: [(B), J, 4, T]
+    # :return: [(B), J, 4, T]
+    # """
+    # batch, qua = (True, qua) if len(qua.shape) == 4 else (False, qua[None, ...])
 
-    ret = torch.nn.functional.normalize(qua, p=2.0, dim=2)
-    return ret if batch else ret[0]
+    # if len(qua.shape) != 4 or qua.shape[2] != 4:
+    #     raise ValueError('Input tensor should be in the shape of BxJx4xF.')
+
+    # ret = torch.nn.functional.normalize(qua, p=2.0, dim=2)
+    # return ret if batch else ret[0]
+    # --- legacy impl --- #
 
     # s = torch.norm(qua, dim=2, keepdim=True)
     # # s = torch.sqrt(torch.sum(qua**2, dim=2, keepdim=True))
@@ -380,7 +397,7 @@ def quaternion_from_two_vectors(v0: torch.Tensor, v1: torch.Tensor) -> torch.Ten
     l0 = torch.norm(v0, dim=-2, keepdim=True)
     l1 = torch.norm(v1, dim=-2, keepdim=True)
     dot = torch.sum(v0 * v1, dim=-2, keepdim=True)
-    w = l0*l1 + dot  # fix bug: since torch.norm <==> torch.sqrt(v ** 2) there is no need to use torch.sqrt any more
+    w = l0*l1 + dot
     qua = torch.cat([w, a], dim=-2)
     qua = torch.nn.functional.normalize(qua, p=2.0, dim=-2)
     return qua
@@ -468,6 +485,19 @@ def pad_position_to_quaternion(_xyz: torch.Tensor) -> torch.Tensor:
     return wxyz
 
 
+def rotate_vector_with_quaternion(vec: torch.Tensor, qua: torch.Tensor) -> torch.Tensor:
+    """
+    :param vec: [..., 3, T]
+    :param qua: [..., 4, T]
+    """
+    mul = mul_two_quaternions
+    pad = pad_position_to_quaternion
+    inv = inverse_quaternion
+
+    assert vec.shape[-2] == 3 and qua.shape[-2] == 4 and vec.shape[-1] == qua.shape[-1]
+    return mul(qua, mul(pad(vec), inv(qua)))[..., 1:, :]
+
+
 def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:
     """
     :param d6: [..., 6, T]
@@ -552,72 +582,251 @@ def slerp_n(*q):
         return slerp(q[0], slerp_n(*q[1:]), 1/N)
 
 
-# def matrix_to_quaternion(matrix):
-#     """
-#     Convert rotations given as rotation matrices to quaternions.
-#
-#     Args:
-#         matrix: Rotation matrices as tensor of shape (..., 3, 3).
-#
-#     Returns:
-#         quaternions with real part first, as tensor of shape (..., 4).
-#     """
-#
-#     def _copy_sign(a, b):
-#         """
-#         Return a tensor where each element has the absolute value taken from the,
-#         corresponding element of a, with sign taken from the corresponding
-#         element of b. This is like the standard copysign floating-point operation,
-#         but is not careful about negative 0 and NaN.
-#
-#         Args:
-#             a: source tensor.
-#             b: tensor whose signs will be used, of the same shape as a.
-#
-#         Returns:
-#             Tensor of the same shape as a with the signs of b.
-#         """
-#         signs_differ = (a < 0) != (b < 0)
-#         return torch.where(signs_differ, -a, a)
-#
-#     def _sqrt_positive_part(x):
-#         """
-#         Returns torch.sqrt(torch.max(0, x))
-#         but with a zero sub-gradient where x is 0.
-#         """
-#         ret = torch.zeros_like(x)
-#         positive_mask = x > 0
-#         ret[positive_mask] = torch.sqrt(x[positive_mask])
-#         return ret
-#
-#     if matrix.size(-1) != 3 or matrix.size(-2) != 3:
-#         raise ValueError(f"Invalid rotation matrix  shape f{matrix.shape}.")
-#     m00 = matrix[..., 0, 0]
-#     m11 = matrix[..., 1, 1]
-#     m22 = matrix[..., 2, 2]
-#     o0 = 0.5 * _sqrt_positive_part(1 + m00 + m11 + m22)
-#     x = 0.5 * _sqrt_positive_part(1 + m00 - m11 - m22)
-#     y = 0.5 * _sqrt_positive_part(1 - m00 + m11 - m22)
-#     z = 0.5 * _sqrt_positive_part(1 - m00 - m11 + m22)
-#     o1 = _copy_sign(x, matrix[..., 2, 1] - matrix[..., 1, 2])
-#     o2 = _copy_sign(y, matrix[..., 0, 2] - matrix[..., 2, 0])
-#     o3 = _copy_sign(z, matrix[..., 1, 0] - matrix[..., 0, 1])
-#     return torch.stack((o0, o1, o2, o3), -1)
+def __rotate_at(q, p, indices=None):
+    """
+    :param q: quat [J, 4, F]
+    :param p: vec3 [J, 3, F]
+    :param indices: index, int or array
+    :return: [J, 3, F]
+    """
+    if isinstance(indices, int):
+        indices = [indices]
+    elif indices is None:
+        indices = slice(None, None, None)
+    p = p.clone()
+    old_p = p
+    old_p[indices] = rotate_vector_with_quaternion(p[indices], q)
+    return old_p
 
 
-# def simple_test():
-#     v0 = torch.zeros((2, 3, 1))
-#     v1 = torch.zeros((2, 3, 1))
-#     v0[..., 0, :] = 1.0
-#     v1[..., 1, :] = 1.0
-#     print(quaternion_from_two_vectors(v0, v1))
-#
-#     v0 = torch.zeros((1, 2, 3, 1))
-#     v1 = torch.zeros((1, 2, 3, 1))
-#     v0[..., 1, :] = 1.0
-#     v1[..., 0, :] = 1.0
-#     print(quaternion_from_two_vectors(v0, v1))
-#
-#
-# if __name__ == '__main__':
-#     simple_test()
+def __get_children(p_index, cur_index) -> list:
+    """
+    get kinematic chain (all children of cur_index excludes cur_index)
+    """
+    chain_list = {cur_index}
+    for c, p in enumerate(p_index):
+        if p in chain_list:
+            chain_list.add(c)
+    chain_list.remove(cur_index)
+    return list(chain_list)
+
+
+def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iterative_EMA'):
+    """
+    a simplified version of multi-target IK
+    :param offset: [J, 3, F]
+    :param target: [J, 3, F]
+    :param p_index: parent's indices
+    :param i: at joint i
+    :param multiple_children_blending: only valid if the current index i has multiple children, options: 
+                                       - "slerp": blend their rotations (quaternions) with equal weights
+                                       - "iterative": get the rotation to align all children iteratively
+                                       - "iterative_EMA": get the rotation to align all children iteratively with smoothing
+                                       - "inference": infer the rotations via axis angle
+                                       - "slerp_after_inf": first get multiple results by inference then slerp them 
+    :return: [1, 4, F]
+    """
+    children = [e for e in range(len(p_index)) if p_index[e] == i]
+
+    if len(children) == 0:
+        corr = torch.zeros(1, 4, target.shape[-1], dtype=target.dtype)
+        corr[:, 0, :] = 1.0
+        return corr
+
+    if len(children) == 1:
+        a = offset[[children[0]], :, :].broadcast_to(1, 3, target.shape[-1])
+        b = target[[children[0]], :, :]
+        rot = quaternion_from_two_vectors(a, b)
+        return rot
+    
+    # solve multiple children
+    if multiple_children_solver == "slerp":
+        r_ls = []
+        for c in children:
+            a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+            b = target[[c], :, :]
+            rot = quaternion_from_two_vectors(a, b)
+            r_ls.append(rot)
+        rot = slerp_n(*r_ls)
+        return rot
+    elif multiple_children_solver == "iterative" or multiple_children_solver == "iterative_EMA":
+        off_ls = []
+        tgt_ls = []
+        EMA = "EMA" in multiple_children_solver
+        for c in children:
+            a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+            b = target[[c], :, :]
+            a, b = normalize_vector(a), normalize_vector(b)
+            off_ls.append(a)
+            tgt_ls.append(b)
+
+        def __apply_rotation(rot_to_apply):
+            for j in range(len(off_ls)):
+                off_ls[j] = rotate_vector_with_quaternion(off_ls[j], rot_to_apply)
+
+        def __get_mean_error():
+            err = 0.0
+            for off, tgt in zip(off_ls, tgt_ls):
+                err += ((off - tgt) ** 2.0).mean().item()
+            return err / len(children)
+
+        rot = None
+        iters = 0
+        max_iters = 30 * len(children)
+        while True:
+            err = __get_mean_error()
+            iters += 1
+            # print(f"err: {err}")
+            if (err < 1e-4 and rot is not None) or iters > max_iters:
+                break
+            for i in range(len(children)):
+                off = off_ls[i]
+                tgt = tgt_ls[i]
+                corr = quaternion_from_two_vectors(off, tgt)
+                __apply_rotation(corr)
+
+                if rot is None:
+                    rot = corr
+                else:
+                    new_rot = mul_two_quaternions(corr, rot)
+                    if EMA and iters > (max_iters // 3): rot = slerp(new_rot, rot, 0.9)  # EMA
+                    else: rot = new_rot
+        return rot
+    elif multiple_children_solver == "inference":
+        off_ls = []
+        tgt_ls = []
+        for c in children:
+            a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+            b = target[[c], :, :]
+            a, b = normalize_vector(a), normalize_vector(b)
+            off_ls.append(a)
+            tgt_ls.append(b)
+
+        def __apply_rotation(rot_to_apply):
+            for j in range(len(off_ls)):
+                off_ls[j] = rotate_vector_with_quaternion(off_ls[j], rot_to_apply)
+
+        def __dot(vec_a, vec_b):
+            # [..., 3, F]
+            return (vec_a * vec_b).sum(dim=-2, keepdim=True)
+
+        rot = None
+        axis = None
+        cos_ls = []
+        for i in range(len(children)):
+            off = off_ls[i]
+            tgt = tgt_ls[i]
+
+            if rot is None:  # to align the first two vectors
+                rot = quaternion_from_two_vectors(off, tgt)
+                axis = tgt
+                __apply_rotation(rot)
+            else:
+                aa = tgt - __dot(axis, tgt) * axis
+                bb = off - __dot(axis, off) * axis
+                cos = __dot(normalize_vector(aa), normalize_vector(bb))
+                cos_ls.append(cos)
+        cos = torch.stack(cos_ls, dim=0).mean(dim=0, keepdim=False)
+        t2 = torch.arccos(cos) * 0.5  # theta / 2
+        c2 = torch.cos(t2)  # cos (theta / 2)
+        s2 = torch.sin(t2)  # sin (theta / 2)
+        w = c2
+        x = axis[:, [0], :] * s2
+        y = axis[:, [1], :] * s2
+        z = axis[:, [2], :] * s2
+        corr = torch.concatenate([w, x, y, z], dim=-2)  # corrective
+        rot = mul_two_quaternions(corr, rot)
+        return rot
+    elif multiple_children_solver == "slerp_after_inf":
+        def __apply_rotation(rot_to_apply):
+            for j in range(len(off_ls)):
+                off_ls[j] = rotate_vector_with_quaternion(off_ls[j], rot_to_apply)
+
+        def __dot(vec_a, vec_b):
+            # [..., 3, F]
+            return (vec_a * vec_b).sum(dim=-2, keepdim=True)
+
+        rot_ls = []
+        N = len(children)
+        for k in range(N):
+            off_ls = []
+            tgt_ls = []
+            for c in children:
+                a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+                b = target[[c], :, :]
+                a, b = normalize_vector(a), normalize_vector(b)
+                off_ls.append(a)
+                tgt_ls.append(b)
+            rot = None
+            axis = None
+            cos_ls = []
+            visit_seq = list(range(N))
+            visit_seq.remove(k)
+            visit_seq = [k] + visit_seq
+            for i in visit_seq:
+                off = off_ls[i]
+                tgt = tgt_ls[i]
+
+                if rot is None:  # to align the first two vectors
+                    rot = quaternion_from_two_vectors(off, tgt)
+                    axis = tgt
+                    __apply_rotation(rot)
+                else:
+                    aa = tgt - __dot(axis, tgt) * axis
+                    bb = off - __dot(axis, off) * axis
+                    cos = __dot(normalize_vector(aa), normalize_vector(bb))
+                    cos_ls.append(cos)
+            # average them since the results may differ due to mismatched skeletons
+            cos = torch.stack(cos_ls, dim=0).mean(dim=0, keepdim=False)
+            t2 = torch.arccos(cos) * 0.5  # theta / 2
+            c2 = torch.cos(t2)  # cos (theta / 2)
+            s2 = torch.sin(t2)  # sin (theta / 2)
+            w = c2
+            x = axis[:, [0], :] * s2
+            y = axis[:, [1], :] * s2
+            z = axis[:, [2], :] * s2
+            corr = torch.concatenate([w, x, y, z], dim=-2)  # corrective
+            rot = mul_two_quaternions(corr, rot)
+            rot_ls.append(rot)
+        return slerp_n(*rot_ls)
+    else:
+        raise NotImplementedError(f"unknown value: {multiple_children_solver}")
+
+
+def get_quat_from_pos(p_index, target, offset):
+    """
+    Debug & Example:
+    ```
+        quick_visualize(p_index, target, 2.0)  # (1)
+        trans, quats = get_quat_from_pos(p_index, target, offset)
+        quick_visualize_fk(p_index, offset, quats, trans, 2.0)  # (2)
+    ```
+    Results in both (1) and (2) should look similar.
+
+    :param p_index:
+    :param target: [J, 3, F]
+    :param offset: [J, 3, 1]
+    :return: trans [1, 3, F], quats [J, 4, F]
+    """
+    assert p_index[0] < 0  # 0 should be the root
+    
+    trans = target[[0], :, :].clone()
+    target = target - trans
+    quats = []
+    for c, p in enumerate(p_index):
+        children = __get_children(p_index, c)
+        if p >= 0:  # assert p_offset == (0, 0, 0)
+            target[children] -= offset[[c]]
+        q = __get_rotation_at(offset, target, p_index, c)
+        target = __rotate_at(inverse_quaternion(q), target, children)
+        quats.append(q)
+
+        # by FK formula: (t: target, q: quaternion, o: offset) 
+        # t0 = 0
+        # t1 = q0 o1
+        # t2 = q0 (o1 + q1 02)
+        # t3 = q0 (o1 + q1 (o2 + q2 o3))
+        # ...
+    
+    quats = torch.concatenate(quats, dim=0)
+    return trans, quats
