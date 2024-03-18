@@ -1,6 +1,7 @@
 from .parser import BVH, JointOffset, JointMotion
 import itertools
 from copy import deepcopy
+from typing import Tuple
 import torch
 from ..motion_tensor import rotations as mor
 from ..motion_tensor import bvh_casting as bvc
@@ -168,7 +169,7 @@ def shift_joint(obj: BVH, target_name: str, offset: list):
     return reorder_bvh(obj)
 
 
-def remove_joint(obj: BVH, remove_names: [list, str], inherent='mul'):
+def remove_joint(obj: BVH, remove_names: Tuple[list, str], inherent='mul'):
     """
     remove a list of given joints,
     this is useful for removing joints that are at the same position
@@ -289,7 +290,7 @@ def remove_joint(obj: BVH, remove_names: [list, str], inherent='mul'):
     return obj
 
 
-def insert_joint_between(obj: BVH, j1: str, j2: str, new_name: str, new_offset: [None, list]=None, divide_ratio=0.5):
+def insert_joint_between(obj: BVH, j1: str, j2: str, new_name: str, new_offset: Tuple[None, list]=None, divide_ratio=0.5):
     """
     :param obj: bvh object
     :param j1: name of joint 1
