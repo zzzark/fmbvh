@@ -3,7 +3,9 @@ gather all the *.bvh files and load them into memory as BVH objects
 """
 
 import os
+from typing import Tuple
 from .. import bvh
+from ..bvh import parser
 import glob
 
 
@@ -43,7 +45,7 @@ class BVHFolder:
     def __len__(self):
         return sum([len(e) for e in self.dataset_list])
 
-    def __getitem__(self, item: int) -> [bvh.parser.BVH, int]:
+    def __getitem__(self, item: int) -> Tuple[parser.BVH, int]:
         cls = 0
         for ds in self.dataset_list:
             if item >= len(ds):
@@ -65,6 +67,8 @@ class BVHFolder:
             if os.path.isdir(subdir):
                 inst_dataset = BVHSubFolder(subdir)
                 self.dataset_list.append(inst_dataset)
+        if len(self.dataset_list) == 0:  # if no subfolder then load the top folder as subfolder
+            self.dataset_list.append(BVHSubFolder(bvh_file_folder))
 
 
 def test():

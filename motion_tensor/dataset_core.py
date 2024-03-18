@@ -11,8 +11,9 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Tuple, List, Any, Type
 
-import motion_process as mop
-import bvh_casting as casting
+from . import motion_process as mop
+from . import bvh_casting as casting
+from ..bvh import folder
 
 
 class BVHDataExtractor:
@@ -78,8 +79,8 @@ class MotionDataDivider:
 
 
 def make_mo_clip_dataset(bvh_file_folder, cache_file_folder,
-                         data_divider: MotionDataDivider=None,
-                         bvh_extractor: BVHDataExtractor=None):
+                         bvh_extractor: BVHDataExtractor=None,
+                         data_divider: MotionDataDivider=None):
     """
     split every *.bvh files into motion clips, and save them to:
         *.mo_clip           // [pickle] a list of N tuples of two tensors  (note: one mo_clip file per bvh file)
@@ -87,12 +88,12 @@ def make_mo_clip_dataset(bvh_file_folder, cache_file_folder,
 
     :param bvh_file_folder:     root/class_1/*.bvh, root/class_2/*.bvh, ...
     :param cache_file_folder:  out/(unique id)_(class id)_(file id).mo_clip.pkl; out/mo_clip_v2.meta
-    :param data_divider: a divider that divides a long motion to short clips
     :param bvh_extractor: a class factory that used to extract features from a motion clip
+    :param data_divider: a divider that divides a long motion to short clips
     :return: None
     """
     if os.path.isfile(os.path.join(cache_file_folder, 'mo_clip_v2.meta')):
-        print(f"[INFO] motion meta file already exists: {os.path.join(cache_file_folder, 'mo_clip_v2.meta')}")
+        print(f"[INFO] motion meta file already exists: {os.path.join(cache_file_folder, 'mo_clip_v2.meta')}", flush=True)
         return
 
     if bvh_extractor is None:
@@ -100,7 +101,7 @@ def make_mo_clip_dataset(bvh_file_folder, cache_file_folder,
     else:
         assert isinstance(bvh_extractor, BVHDataExtractor)
 
-    dataset = bvh.folder.BVHFolder(bvh_file_folder)
+    dataset = folder.BVHFolder(bvh_file_folder)
     os.makedirs(cache_file_folder, exist_ok=True)
 
     meta = []
@@ -368,7 +369,7 @@ def gather_statistic(bvh_file_folder, cache_file_folder,
     else:
         assert isinstance(extractor, BVHDataExtractor)
 
-    dataset = bvh.folder.BVHFolder(bvh_file_folder)
+    dataset = folder.BVHFolder(bvh_file_folder)
 
     def _gather_per_class():
         file_id = 0
@@ -419,7 +420,7 @@ def gather_statistic(bvh_file_folder, cache_file_folder,
     return dic
 
 
-def test_make_and_load():
+def test():
 
     class _MyExtractor(BVHDataExtractor):
         def __init__(self):
@@ -431,11 +432,7 @@ def test_make_and_load():
             pos_ = casting.get_positions_from_bvh(bvh_obj)
             pos_ = self.scale(pos_, frame_time=bvh_obj.frame_time)
             return (off_, tps_, p_index), (trs_, qua_, pos_)
-
-    divider = MotionDataDivider(64, 64, 0)
-    extractor = _MyExtractor()
-    make_mo_clip_dataset(r"D:\_dataset\bvh_test", r"D:\_dataset\bvh_test_pickle", divider, extractor)
-
+    
     class _MyProcessor(MoClipProcessor):
 
         def f_process_static(self, class_id, *args) -> tuple:
@@ -445,71 +442,60 @@ def test_make_and_load():
         def f_process_dynamic(self, class_id, *args) -> tuple:
             (trs_, qua_, pos_) = args
             return trs_, qua_, pos_
-
-    processor = _MyProcessor()
-    dataset = load_mo_clip_dataset(r"D:\_dataset\bvh_test_pickle", processor)
-
-    def run_vis():
-        from visualization.visualize_motion import MoVisualizer
-        for (off_, tps_, p_index, trs_, qua_, pos_, cid) in dataset:
-            def _next():
-                f = 0
-                while True:
-                    yield pos_[..., f].tolist()
-                    f = (f + 1) % pos_.shape[-1]
-            mvz = MoVisualizer(p_index, _next(), scale=200.0)
-            mvz.run()
-
-    run_vis()
-
-
-def test_mean_and_var():
-    class _MyExtractor(BVHDataExtractor):
-        def __init__(self):
-            super(_MyExtractor, self).__init__(desired_frame_time=1 / 30.0)
-
-        def extract(self, bvh_obj: bvh.parser.BVH) -> Tuple[Tuple[torch.Tensor, ...], Tuple[torch.Tensor, ...]]:
-            (off_, tps_), (trs_, qua_) = super(_MyExtractor, self).extract(bvh_obj)
-            p_index = bvh_obj.dfs_parent()
-            pos_ = casting.get_positions_from_bvh(bvh_obj)
-            pos_ = self.scale(pos_, frame_time=bvh_obj.frame_time)
-            return (off_, tps_, p_index), (trs_, qua_, pos_)
-
-    extractor = _MyExtractor()
-
-    class _MyProcessor(MoClipProcessor):
-
-        def f_process_static(self, class_id, *args) -> tuple:
-            (off_, tps_, p_index) = args
-            return off_, tps_, p_index
-
-        def f_process_dynamic(self, class_id, *args) -> tuple:
-            (trs_, qua_, pos_) = args
-            return trs_, qua_, pos_
-
-    processor = _MyProcessor()
 
     class _MyCollector(MoStatisticCollector):
 
-        def get_stat(self, class_id: int, feature: List[tuple]) -> Any:
+        @staticmethod
+        def __get_stat(feature: List[tuple]) -> Any:
             # for off_, tps_, p_index, trs_, qua_, pos_ in feature:
             p_index = feature[0][2]
             pos_ls = [e[5] for e in feature]
             m = torch.mean(torch.concat(pos_ls, dim=-1), dim=(-1))
             v = torch.var(torch.concat(pos_ls, dim=-1), dim=(-1))
-
             return m, v, p_index
 
-    collector = _MyCollector()
-    stat_dic = gather_statistic(r"D:\_dataset\bvh_test", r"D:\_dataset\bvh_test_pickle",
-                                extractor, processor, collector)
+        def get_stat(self, class_id: int, feature: List[tuple]) -> Any:
+            return self.__get_stat(feature)
+        
+        def get_stat_all(self, feature: List[Tuple]) -> Any:
+            return self.__get_stat(feature)
 
-    def run_vis():
-        from visualization.visualize_motion import MoVisualizer
-        for m, v, p_index in stat_dic.values():
+    def test_make_and_load(in_folder, out_folder):
+        divider = MotionDataDivider(64, 64, 0)
+        extractor = _MyExtractor()
+        make_mo_clip_dataset(in_folder, out_folder, extractor, divider)
+
+        processor = _MyProcessor()
+        dataset = load_mo_clip_dataset(out_folder, processor)
+
+        def run_vis():
+            from ..visualization.visualize_motion import MoVisualizer
+            for (off_, tps_, p_index, trs_, qua_, pos_, cid) in dataset:
+                def _next():
+                    f = 0
+                    while True:
+                        yield pos_[..., f].tolist()
+                        f = (f + 1) % pos_.shape[-1]
+                mvz = MoVisualizer(p_index, _next(), scale=200.0)
+                mvz.run()
+
+        run_vis()
+
+    def test_mean_and_var(in_folder, out_folder):
+        extractor = _MyExtractor()
+        processor = _MyProcessor()
+        collector = _MyCollector()
+        stat_dic = gather_statistic(in_folder, out_folder,
+                                    extractor, processor, collector)
+
+        stat_dic = torch.load(out_folder + "/stat.pkl")
+
+        def run_vis():
+            from ..visualization.visualize_motion import MoVisualizer
+            m, v, p_index = stat_dic["all"]
             pos = torch.zeros(m.shape[0], m.shape[1], 100)
             for i in range(100):
-                pos[..., i] = v * (i/99 - 0.5) + m
+                pos[..., i] = v * (i/99 - 0.5) * 0.01 + m
 
             def _next():
                 f = 0
@@ -520,9 +506,11 @@ def test_mean_and_var():
             mvz = MoVisualizer(p_index, _next(), scale=200.0)
             mvz.run()
 
-    run_vis()
+        run_vis()
+        
+    test_make_and_load("D:/datasets/test", "D:/datasets/test.cache")
+    test_mean_and_var("D:/datasets/test", "D:/datasets/test.cache")
 
 
 if __name__ == '__main__':
-    test_make_and_load()
-    test_mean_and_var()
+    test()

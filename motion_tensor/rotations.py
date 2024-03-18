@@ -403,6 +403,34 @@ def quaternion_from_two_vectors(v0: torch.Tensor, v1: torch.Tensor) -> torch.Ten
     return qua
 
 
+def quaternion_rotate_vector(q, v) -> torch.Tensor:
+    """
+    :param q: [..., 4, F]
+    :param v: [..., 3, F]
+    :return: q * v * q-1, [..., 3, F]
+    """
+    q_ = (q[..., 0, :], q[..., 1, :], q[..., 2, :], q[..., 3, :])
+    v_ = (None, v[..., 0, :], v[..., 1, :], v[..., 2, :])
+    qi = inverse_quaternion(q)
+    qi = (qi[..., 0, :], qi[..., 1, :], qi[..., 2, :], qi[..., 3, :])
+    r = _warped_mul_two_quaternions(_warped_mul_two_quaternions(q_, v_), qi)
+    return torch.stack(r[1:], dim=-2)
+
+
+def quaternion_rotate_vector_inv(q, v) -> torch.Tensor:
+    """
+    :param q: [..., 4, F]
+    :param v: [..., 3, F]
+    :return: q-1 * v * q, [..., 3, F]
+    """
+    q_ = (q[..., 0, :], q[..., 1, :], q[..., 2, :], q[..., 3, :])
+    v_ = (None, v[..., 0, :], v[..., 1, :], v[..., 2, :])
+    qi = inverse_quaternion(q)
+    qi = (qi[..., 0, :], qi[..., 1, :], qi[..., 2, :], qi[..., 3, :])
+    r = _warped_mul_two_quaternions(_warped_mul_two_quaternions(qi, v_), q_)
+    return torch.stack(r[1:], dim=-2)
+
+
 def conjugate_quaternion(q) -> torch.Tensor:
     """
     :param q: [..., 4, F]
@@ -535,7 +563,7 @@ def slerp(q1, q2, t):
     q1[less_than_zero] = -q1[less_than_zero]
     dot_product[less_than_zero] = -dot_product[less_than_zero]
 
-    # WARNING: GRADIENT EXPLOSION
+    # FIXME: GRADIENT EXPLOSION
     eps = 0  # 1e-8
     dot_product = torch.clamp(dot_product, -1+eps, 1-eps)  # Ensure dot product is in range [-1, 1]
 
@@ -545,7 +573,7 @@ def slerp(q1, q2, t):
     # if sin_theta == 0.0:
     #     return q1  # Quaternions are already aligned
 
-    # WARNING: CHECK FOR INF / NAN
+    # FIXME: CHECK FOR INF / NAN
     weight_q1 = torch.sin((1 - t) * theta_0) / sin_theta
     weight_q2 = torch.sin(t * theta_0) / sin_theta
 

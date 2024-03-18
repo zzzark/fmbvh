@@ -1,10 +1,13 @@
 import torch
 from .. import bvh
+from ..bvh import parser as parser
 from .. import motion_tensor as mot
+from ..motion_tensor import rotations
+from ..motion_tensor import kinematics
 from typing import Tuple
 
 
-def write_euler_to_bvh(trs: torch.Tensor, eul: torch.Tensor, t_bvh: bvh.parser.BVH,
+def write_euler_to_bvh(trs: torch.Tensor, eul: torch.Tensor, t_bvh: parser.BVH,
                        order='ZYX', to_deg=180.0/3.1415926535, frame_time=None):
     """
     write euler(rad) to bvh object(NOTE: this will overwrite `t_bvh`) (degree)
@@ -51,13 +54,13 @@ def write_quaternion_to_bvh(trs: torch.Tensor, qua: torch.Tensor,
     :param frame_time: new frame time, None for default
     :return: a bvh object (t_bvh)
     """
-    qua = mot.rotations.normalize_quaternion(qua[None, ...])
-    eul = mot.rotations.quaternion_to_euler(qua, order='ZYX', intrinsic=False)[0]
-    # eul = mot.rotations.quaternion_to_euler_2(qua, order='ZYX', intrinsic=False)  # slower
+    qua = rotations.normalize_quaternion(qua[None, ...])
+    eul = rotations.quaternion_to_euler(qua, order='ZYX', intrinsic=False)[0]
+    # eul = rotations.quaternion_to_euler_2(qua, order='ZYX', intrinsic=False)  # slower
     return write_euler_to_bvh(trs, eul, t_bvh, 'ZYX', to_deg, frame_time)
 
 
-def write_offsets_to_bvh(offsets: torch.Tensor, bvh_obj: bvh.parser.BVH):
+def write_offsets_to_bvh(offsets: torch.Tensor, bvh_obj: parser.BVH):
     """
     :param bvh_obj:
     :param offsets: Jx3x1
@@ -91,7 +94,7 @@ def get_euler_from_bvh(bvh_obj: bvh.parser.BVH, to_rad=3.1415926535/180.0) -> Tu
     return trs, eul
 
 
-def get_quaternion_from_bvh(bvh_obj: bvh.parser.BVH) -> Tuple[torch.Tensor, torch.Tensor]:
+def get_quaternion_from_bvh(bvh_obj: parser.BVH) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     get root_translation, quaternion from an bvh object
     :param bvh_obj: bvh object
@@ -100,11 +103,11 @@ def get_quaternion_from_bvh(bvh_obj: bvh.parser.BVH) -> Tuple[torch.Tensor, torc
     trs, eul = get_euler_from_bvh(bvh_obj)
     order = bvh_obj.offset_data[bvh_obj.root_name].order
     if len(order) == 6: order = order[3:]
-    qua = mot.rotations.euler_to_quaternion(eul[None, ...], to_rad=1.0, order=order)
+    qua = rotations.euler_to_quaternion(eul[None, ...], to_rad=1.0, order=order)
     return trs, qua[0]
 
 
-def get_offsets_from_bvh(bvh_obj: bvh.parser.BVH) -> torch.Tensor:
+def get_offsets_from_bvh(bvh_obj: parser.BVH) -> torch.Tensor:
     """
     get joint offsets from bvh object
     :param bvh_obj:
@@ -114,7 +117,7 @@ def get_offsets_from_bvh(bvh_obj: bvh.parser.BVH) -> torch.Tensor:
     return torch.tensor(offsets, dtype=torch.float32)[..., None]
 
 
-def get_positions_from_bvh(bvh_obj: bvh.parser.BVH, locomotion=True) -> torch.Tensor:
+def get_positions_from_bvh(bvh_obj: parser.BVH, locomotion=True) -> torch.Tensor:
     """
     get joint positions from bvh object
     :param bvh_obj:
@@ -125,12 +128,12 @@ def get_positions_from_bvh(bvh_obj: bvh.parser.BVH, locomotion=True) -> torch.Te
     off = get_offsets_from_bvh(bvh_obj)
     trs, qua = get_quaternion_from_bvh(bvh_obj)
     trs = trs if locomotion else None
-    mat = mot.rotations.quaternion_to_matrix(qua)
-    pos = mot.kinematics.forward_kinematics(p_index, mat, trs, off)
+    mat = rotations.quaternion_to_matrix(qua)
+    pos = kinematics.forward_kinematics(p_index, mat, trs, off)
     return pos
 
 
-def get_t_pose_from_bvh(bvh_obj: bvh.parser.BVH) -> torch.Tensor:
+def get_t_pose_from_bvh(bvh_obj: parser.BVH) -> torch.Tensor:
     """
     get t-pose from bvh object
     :param bvh_obj:
@@ -142,3 +145,14 @@ def get_t_pose_from_bvh(bvh_obj: bvh.parser.BVH) -> torch.Tensor:
             continue
         positions[i, ...] += positions[p, ...]
     return positions
+
+
+def get_height_from_bvh(bvh_obj: bvh.parser.BVH, ee_head, ee_foot) -> float:
+    """
+    :param bvh_obj:
+    :param ee_head:
+    :param ee_foot:
+    :return:
+    """
+    pos = get_t_pose_from_bvh(bvh_obj)
+    return abs((pos[ee_head, 1] - pos[ee_foot, 1]).item())
