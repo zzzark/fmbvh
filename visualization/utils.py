@@ -1,8 +1,8 @@
 import torch
 
-from motion_tensor.rotations import quaternion_to_matrix as q2m
-from motion_tensor.kinematics import forward_kinematics as fk
-from visualization.visualize_motion import MoVisualizer
+from ..motion_tensor.rotations import quaternion_to_matrix as q2m
+from ..motion_tensor.kinematics import forward_kinematics as fk
+from ..visualization.visualize_motion import MoVisualizer
 
 
 def quick_visualize_fk(p_index, off, qua, trans, scale=200.0):
