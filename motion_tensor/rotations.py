@@ -473,16 +473,12 @@ def mul_two_quaternions(q0, q1) -> torch.Tensor:
 def rectify_w_of_quaternion(qua: torch.Tensor, inplace=False) -> torch.Tensor:
     """
     quaternion[w < 0] --> quaternion[w < 0]
-    :param qua: [(B), J, 4, T]
+    :param qua: [..., 4, T]
     :param inplace: inplace operator or not
-    :return: [(B), J, 4, T]
+    :return: [..., 4, T]
     """
-    batch, qua = (True, qua) if len(qua.shape) == 4 else (False, qua[None, ...])
 
-    if len(qua.shape) != 4 or qua.shape[2] != 4:
-        raise ValueError('Input tensor should be in the shape of [(B), J, 4, T].')
-
-    w_lt = (qua[:, :, [0], :] < 0.0).expand(-1, -1, 4, -1)  # w less than 0.0
+    w_lt = (qua[..., [0], :] < 0.0).expand(*qua.shape[:-2], 4, -1)  # w less than 0.0
     w_ge = torch.logical_not(w_lt)  # w greater equal than 0.0
 
     if inplace:
@@ -493,7 +489,7 @@ def rectify_w_of_quaternion(qua: torch.Tensor, inplace=False) -> torch.Tensor:
         new[w_lt] = qua[w_lt] * (-1)
         qua = new
 
-    return qua if batch else qua[0]
+    return qua
 
 
 def pad_position_to_quaternion(_xyz: torch.Tensor) -> torch.Tensor:

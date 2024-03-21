@@ -17,7 +17,7 @@ def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sa
     :param sampler: 'nearest', 'linear', etc.
     :return:
     """
-    assert len(motion.shape) == 3, 'input rotation should be Jx(3/4)xF'
+    assert len(motion.shape) == 3, 'sample_frames: input should be [J, C, F]'
 
     if scale_factor is not None and abs(scale_factor - 1.0) > 1e-3:
         # noinspection PyArgumentList
@@ -30,7 +30,52 @@ def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sa
     return motion
 
 
-def align_root_rot(pos: torch.Tensor, root_rot, hip: tuple, sho: tuple, to_axis='Z', up_axis='Y'):
+def align_root_rot(pos: torch.Tensor, root_rot, hip: tuple, sho: tuple, to_axis='Z', up_axis='Y', return_pos=False):
+    """
+    align root rotation to a certain direction (x/y/z-axis)
+    :param pos:  [(B), J, 3, F], positions
+    :param root_rot: [(B), 4, F], rotations
+    :param to_axis: axis to align (to face towards)
+    :param up_axis: up axis
+    :param hip: (L-hip, R-hip)
+    :param sho:  (L-shoulder, R-shoulder)
+    :return: [(B), 4, F] for new root rotation (towards `to_axis` axis), [(B), 1, F] for rotation radius along `up_axis`
+    """
+    assert isinstance(hip, tuple) and isinstance(sho, tuple)
+    assert hip[0] is not None and hip[1] is not None and sho[0] is not None and sho[1] is not None
+
+    h = pos[..., hip[0], :, :] - pos[..., hip[1], :, :]  # L<-R
+    s = pos[..., sho[0], :, :] - pos[..., sho[1], :, :]  # L<-R
+    ve = (h + s) * 0.5
+    up = torch.zeros_like(ve, device=pos.device)
+    up[..., 'XYZ'.index(up_axis), :] = 1.0
+
+    forward = torch.cross(ve, up, dim=-2)
+    forward = torch.nn.functional.normalize(forward, p=2.0, dim=-2)  # [1, 3, F]
+    forward[..., 'XYZ'.index(up_axis), :] = 0.0  # proj to XZ plane
+    forward = torch.nn.functional.normalize(forward, p=2.0, dim=-2)
+
+    to_dir = torch.zeros_like(forward, device=pos.device)
+    to_dir[..., 'XYZ'.index(to_axis), :] = 1.0
+
+    to_dir_qua = rotations.quaternion_from_two_vectors(forward, to_dir)  # [4, F]
+    w = to_dir_qua[..., 0, :]
+    root_eul_y = torch.arccos(w) * 2  # theta
+    # TODO: smooth root_eul_y and recompute to_dir_qua
+
+    new_root = rotations.mul_two_quaternions(to_dir_qua, root_rot)  # [(B), 4, F]
+    new_root = rotations.rectify_w_of_quaternion(new_root)  # [(B), 4, F]
+
+    if return_pos:
+        new_pos = pos - pos[..., [0], :, :]
+        new_pos = rotations.rotate_vector_with_quaternion(new_pos, to_dir_qua[..., None, :, :])
+        # new_pos = new_pos + pos[..., [0], :, :]
+        return new_root, root_eul_y, new_pos
+    else:
+        return new_root, root_eul_y
+
+
+def align_root_rot_old(pos: torch.Tensor, root_rot, hip: tuple, sho: tuple, to_axis='Z', up_axis='Y'):
     """
     align root rotation to a certain direction (x/y/z-axis)
     :param pos:  [(B), J, 3, F], positions

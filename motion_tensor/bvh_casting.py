@@ -1,5 +1,4 @@
 import torch
-from .. import bvh
 from ..bvh import parser as parser
 from .. import motion_tensor as mot
 from ..motion_tensor import rotations
@@ -42,7 +41,7 @@ def write_euler_to_bvh(trs: torch.Tensor, eul: torch.Tensor, t_bvh: parser.BVH,
 
 
 def write_quaternion_to_bvh(trs: torch.Tensor, qua: torch.Tensor,
-                            t_bvh: bvh.parser.BVH, to_deg=180.0/3.1415926535,
+                            t_bvh: parser.BVH, to_deg=180.0/3.1415926535,
                             frame_time=None):
     """
     write quaternion to bvh object(NOTE: this will overwrite `t_bvh`) (degree),
@@ -71,7 +70,7 @@ def write_offsets_to_bvh(offsets: torch.Tensor, bvh_obj: parser.BVH):
     return bvh_obj
 
 
-def get_euler_from_bvh(bvh_obj: bvh.parser.BVH, to_rad=3.1415926535/180.0) -> Tuple[torch.Tensor, torch.Tensor]:
+def get_euler_from_bvh(bvh_obj: parser.BVH, to_rad=3.1415926535/180.0) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     get root_translation, euler(rad) from an bvh object
     :param bvh_obj: bvh object
@@ -117,7 +116,7 @@ def get_offsets_from_bvh(bvh_obj: parser.BVH) -> torch.Tensor:
     return torch.tensor(offsets, dtype=torch.float32)[..., None]
 
 
-def get_positions_from_bvh(bvh_obj: parser.BVH, locomotion=True) -> torch.Tensor:
+def get_positions_from_bvh(bvh_obj: parser.BVH, locomotion=True, return_rest=False) -> torch.Tensor:
     """
     get joint positions from bvh object
     :param bvh_obj:
@@ -130,7 +129,10 @@ def get_positions_from_bvh(bvh_obj: parser.BVH, locomotion=True) -> torch.Tensor
     trs = trs if locomotion else None
     mat = rotations.quaternion_to_matrix(qua)
     pos = kinematics.forward_kinematics(p_index, mat, trs, off)
-    return pos
+    if not return_rest:
+        return pos
+    else:
+        return pos, off, trs, qua
 
 
 def get_t_pose_from_bvh(bvh_obj: parser.BVH) -> torch.Tensor:
@@ -147,7 +149,7 @@ def get_t_pose_from_bvh(bvh_obj: parser.BVH) -> torch.Tensor:
     return positions
 
 
-def get_height_from_bvh(bvh_obj: bvh.parser.BVH, ee_head, ee_foot) -> float:
+def get_height_from_bvh(bvh_obj: parser.BVH, ee_head, ee_foot, dim=1) -> float:
     """
     :param bvh_obj:
     :param ee_head:
@@ -155,4 +157,4 @@ def get_height_from_bvh(bvh_obj: bvh.parser.BVH, ee_head, ee_foot) -> float:
     :return:
     """
     pos = get_t_pose_from_bvh(bvh_obj)
-    return abs((pos[ee_head, 1] - pos[ee_foot, 1]).item())
+    return abs((pos[ee_head, dim] - pos[ee_foot, dim]).item())

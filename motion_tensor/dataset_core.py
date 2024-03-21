@@ -14,6 +14,7 @@ from typing import Tuple, List, Any, Type
 from . import motion_process as mop
 from . import bvh_casting as casting
 from ..bvh import folder
+from ..bvh import parser
 
 
 class BVHDataExtractor:
@@ -30,12 +31,12 @@ class BVHDataExtractor:
 
     def scale(self, motion: torch.Tensor, frame_time) -> torch.Tensor:
         scale_factor = frame_time / self.desired_frame_time
-        sampler = 'nearest'
+        sampler = 'linear'
         motion = mop.sample_frames(motion, scale_factor=scale_factor, sampler=sampler)
         return motion
 
     # noinspection PyMethodMayBeStatic
-    def extract(self, bvh_obj: bvh.parser.BVH) -> Tuple[Tuple[torch.Tensor, ...], Tuple[torch.Tensor, ...]]:
+    def extract(self, bvh_obj: parser.BVH) -> Tuple[Tuple[torch.Tensor, ...], Tuple[torch.Tensor, ...]]:
         """
         :param bvh_obj:
         :return: (static features), (dynamic features), frame_time
@@ -113,7 +114,13 @@ def make_mo_clip_dataset(bvh_file_folder, cache_file_folder,
             print(f'[WARNING] frame count of bvh file {obj.filepath} is 0!')
             continue
         else:
-            static, dynamic = bvh_extractor.extract(obj)
+            try:
+                static, dynamic = bvh_extractor.extract(obj)
+                if not isinstance(static, tuple): static = (static, )
+                if not isinstance(dynamic, tuple): dynamic = (dynamic, )
+            except Exception as e:
+                print(f"[WARNING] an error occured when processing {obj.filepath}: {e}")
+                continue
 
         # ---- file ids ---- #
         if last_class_id != class_id:  # check if we are stepping into a new class
@@ -141,13 +148,19 @@ def make_mo_clip_dataset(bvh_file_folder, cache_file_folder,
         #   [(f1, f2, ...), (f1, f2, ...), ...]
         #
         dyn_list = [e for e in zip(*dyn_list)]
+
+
+        class_name = os.path.basename(dataset.dataset_list[class_id].folder_path)
+        file_name = os.path.basename(obj.filepath)[:-4]  # discard ".bvh" ext
         meta.append({
-            'class_id': class_id,
             'file_id': file_id,
-            'num_clip': len(dyn_list)
+            'class_id': class_id,
+            'num_clip': len(dyn_list),
+            'class_name': class_name,
+            'file_name': file_name,
         })
 
-        filepath = os.path.join(cache_file_folder, f'{class_id:03d}_{file_id:03d}.mo_clip.pkl')
+        filepath = os.path.join(cache_file_folder, f'{class_name}_{file_name}_{file_id:03d}.pkl')
         torch.save({
             "static": sta_list,
             "dynamic": dyn_list
@@ -159,11 +172,10 @@ def make_mo_clip_dataset(bvh_file_folder, cache_file_folder,
         json.dump(meta, meta_f, indent=4, sort_keys=True)
 
 
-class MoClipProcessor(ABC):
+class MoClipProcessor:
     """
     the processed results will be stored in memory to speed up data loading
     """
-    @abstractmethod
     def f_process_static(self, class_id, *args) -> tuple:
         """
         please refer to f_process_dynamic
@@ -171,9 +183,8 @@ class MoClipProcessor(ABC):
         :param class_id:
         :return: by default it returns [offset, position], refer to BVHDataExtractor.extract
         """
-        raise NotImplementedError
+        return args
 
-    @abstractmethod
     def f_process_dynamic(self, class_id, *args) -> tuple:
         """
         this function is used to extract useful features of a motion clip
@@ -186,7 +197,7 @@ class MoClipProcessor(ABC):
         :return: by default it returns [root translation, joint rotations(quaternion)]
                  refer to BVHDataExtractor.extract
         """
-        raise NotImplementedError
+        return args
 
 
 class MoClipDataset:
@@ -211,14 +222,16 @@ class MoClipDataset:
         self._item_to_file = []
         self._total_clips = 0
         self._loaded_clips = 0
-        self._processor = processor
+        self._processor = processor if processor is not None else MoClipProcessor()
 
         iter_ = range(len(self._meta))
         for file_item in iter_:
             file_id   = self._meta[file_item]['file_id']
             class_id  = self._meta[file_item]['class_id']
             num_clip  = self._meta[file_item]['num_clip']
-            path = os.path.join(self._path, f'{class_id:03d}_{file_id:03d}.mo_clip.pkl')
+            class_name = self._meta[file_item]['class_name']
+            file_name = self._meta[file_item]['file_name']
+            path = os.path.join(self._path, f'{class_name}_{file_name}_{file_id:03d}.pkl')
 
             if class_id not in self._class_ids:
                 self._class_ids[class_id] = []
@@ -245,6 +258,8 @@ class MoClipDataset:
         :param class_id:
         :return:
         """
+        if not isinstance(static, tuple): static = (static, )
+        if not isinstance(dynamic, tuple): dynamic = (dynamic, )
         return static + dynamic + (class_id, )
 
     def _lazy_load(self, item: int):
@@ -375,6 +390,7 @@ def gather_statistic(bvh_file_folder, cache_file_folder,
         file_id = 0
         last_class_id = 0
         stat_list = []
+        frames = 0
 
         for class_id, obj in dataset:
             if last_class_id != class_id:  # check if we are stepping into a new class
@@ -388,14 +404,21 @@ def gather_statistic(bvh_file_folder, cache_file_folder,
                 print(f'[WARNING] frame count of bvh file {obj.filepath} is 0!')
                 continue
             else:
-                static, dynamic = extractor.extract(obj)
+                try:
+                    static, dynamic = extractor.extract(obj)
+                except Exception as e:
+                    print(f"[WARNING] an error occured when processing {obj.filepath}: {e}")
+                    continue
+            frames += dynamic.shape[-1]
+            if not isinstance(static, tuple): static = (static, )
+            if not isinstance(dynamic, tuple): dynamic = (dynamic, )
             static = processor.f_process_static(class_id, *static)
             dynamic = processor.f_process_dynamic(class_id, *dynamic)
             stat_list.append(static + dynamic)
 
             file_id += 1
 
-        yield last_class_id, stat_list  # yield last class
+        yield last_class_id, stat_list, frames  # yield last class
 
     os.makedirs(cache_file_folder, exist_ok=True)
     cache_file = os.path.join(cache_file_folder, 'stat.pkl')
@@ -409,12 +432,15 @@ def gather_statistic(bvh_file_folder, cache_file_folder,
     dic = {}
     dic_per = {}
     stat_all = []
-    for cid, stat in _gather_per_class():
+    total_frames = 0
+    for cid, stat, frames in _gather_per_class():
         dic_per[cid] = collector.get_stat(cid, stat)
         stat_all += stat
+        total_frames += frames
     lis_all = collector.get_stat_all(stat_all)
     dic['per'] = dic_per
     dic['all'] = lis_all
+    dic['frames'] = total_frames
     with open(cache_file, 'wb') as f:
         torch.save(dic, f)
     return dic
@@ -426,7 +452,7 @@ def test():
         def __init__(self):
             super(_MyExtractor, self).__init__(desired_frame_time=1/30.0)
 
-        def extract(self, bvh_obj: bvh.parser.BVH) -> Tuple[Tuple[torch.Tensor, ...], Tuple[torch.Tensor, ...]]:
+        def extract(self, bvh_obj: parser.BVH) -> Tuple[Tuple[torch.Tensor, ...], Tuple[torch.Tensor, ...]]:
             (off_, tps_), (trs_, qua_) = super(_MyExtractor, self).extract(bvh_obj)
             p_index = bvh_obj.dfs_parent()
             pos_ = casting.get_positions_from_bvh(bvh_obj)
@@ -487,8 +513,6 @@ def test():
         collector = _MyCollector()
         stat_dic = gather_statistic(in_folder, out_folder,
                                     extractor, processor, collector)
-
-        stat_dic = torch.load(out_folder + "/stat.pkl")
 
         def run_vis():
             from ..visualization.visualize_motion import MoVisualizer

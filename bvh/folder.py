@@ -10,12 +10,13 @@ import glob
 
 
 class BVHSubFolder:
-    def __init__(self, bvh_file_folder: str=""):
+    def __init__(self, sub_folder_path: str=""):
         self.file_list = []
         self.bvh_cache = {}
+        self.folder_path = sub_folder_path
 
-        if bvh_file_folder != "":
-            self.create_dataset(bvh_file_folder)
+        if sub_folder_path != "":
+            self.create_dataset(sub_folder_path)
 
     def create_dataset(self, bvh_file_folder: str) -> None:
         self.file_list = []
@@ -26,10 +27,10 @@ class BVHSubFolder:
     def __len__(self):
         return len(self.file_list)
 
-    def __getitem__(self, item) -> bvh.parser.BVH:
+    def __getitem__(self, item) -> parser.BVH:
         filename = self.file_list[item]  # may raise an IndexError
         if filename not in self.bvh_cache:
-            bvh_obj = bvh.parser.BVH(self.file_list[item])
+            bvh_obj = parser.BVH(self.file_list[item])
             self.bvh_cache[filename] = bvh_obj
         return self.bvh_cache[filename]
 
@@ -45,7 +46,7 @@ class BVHFolder:
     def __len__(self):
         return sum([len(e) for e in self.dataset_list])
 
-    def __getitem__(self, item: int) -> Tuple[parser.BVH, int]:
+    def __getitem__(self, item: int) -> Tuple[int, parser.BVH]:
         cls = 0
         for ds in self.dataset_list:
             if item >= len(ds):
@@ -69,14 +70,3 @@ class BVHFolder:
                 self.dataset_list.append(inst_dataset)
         if len(self.dataset_list) == 0:  # if no subfolder then load the top folder as subfolder
             self.dataset_list.append(BVHSubFolder(bvh_file_folder))
-
-
-def test():
-    folder = BVHFolder(r"D:\_dataset\bvh_test")
-    print(len(folder))
-    for cls, obj in folder:
-        print(cls, obj.filepath)
-
-
-if __name__ == '__main__':
-    test()

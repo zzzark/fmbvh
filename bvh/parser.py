@@ -280,19 +280,8 @@ class BVH:
                         self.motion_data[name].data.append(data_of_frame[i:i + channel])
                         i += channel
 
-
-def demo():
-    bvh_obj = BVH('../data/assets/test.bvh')
-    for name in bvh_obj.dfs():
-        print(name)
-    bvh_obj.to_file('../temp/out.bvh')
-    print([e for e in bvh_obj.dfs_index()])
-    print([e for e in bvh_obj.dfs_parent()])
-    print(' ------------- ')
-    bvh_obj = BVH('../data/assets/simple.bvh')
-    print([e for e in bvh_obj.dfs_index()])
-    print([e for e in bvh_obj.dfs_parent()])
-
-
-if __name__ == '__main__':
-    demo()
+    def print_topology_info(self):
+        print("BVH topology --- >>>")
+        for i, (name, depth) in enumerate(self.dfs()):
+            print('-'*depth, name, '----', i)
+        print("<<< --- BVH topology")
