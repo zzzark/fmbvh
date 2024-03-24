@@ -66,7 +66,7 @@ def rectify_joint(obj: BVH, parent: str, target: str, direction: list):
 
     __gather_children(q_ls, q_ls[0])
 
-    pis = obj.get_index_of_selected_joints(q_ls)
+    pis = obj.get_indices_of_joints(q_ls)
     tis = pis[1:]
 
     t, q = bvc.get_quaternion_from_bvh(obj)
@@ -134,9 +134,9 @@ def shift_joint(obj: BVH, target_name: str, offset: list):
     tn = target_name
     cn = tj.children_names
 
-    pi = obj.get_index_of_selected_joints([pn])  # parent index
-    ti = obj.get_index_of_selected_joints([tn])  # target index
-    ci = obj.get_index_of_selected_joints(cn)  # indices of children
+    pi = obj.get_indices_of_joints([pn])  # parent index
+    ti = obj.get_indices_of_joints([tn])  # target index
+    ci = obj.get_indices_of_joints(cn)  # indices of children
 
     if len(ci) != 0:
         t, q = bvc.get_quaternion_from_bvh(obj)
@@ -189,7 +189,7 @@ def remove_joint(obj: BVH, remove_names: Tuple[list, str], inherent='mul'):
         tn = rm_name
 
         if inherent == 'none':
-            ic = obj.get_index_of_selected_joints(obj.offset_data[rm_name].children_names)  # indices of children
+            ic = obj.get_indices_of_joints(obj.offset_data[rm_name].children_names)  # indices of children
             if len(ic) != 0:
                 # add target offset to children
                 for cn in tj.children_names:
@@ -205,8 +205,8 @@ def remove_joint(obj: BVH, remove_names: Tuple[list, str], inherent='mul'):
 
             t, q = bvc.get_quaternion_from_bvh(obj)
 
-            it = obj.get_index_of_selected_joints([tn])  # target index
-            ic = obj.get_index_of_selected_joints(obj.offset_data[rm_name].children_names)  # indices of children
+            it = obj.get_indices_of_joints([tn])  # target index
+            ic = obj.get_indices_of_joints(obj.offset_data[rm_name].children_names)  # indices of children
 
             if len(ic) != 0:
                 Qt, Qc = q[it], q[ic]
@@ -234,9 +234,9 @@ def remove_joint(obj: BVH, remove_names: Tuple[list, str], inherent='mul'):
             o = bvc.get_offsets_from_bvh(obj)
 
             cns = obj.offset_data[rm_name].children_names  # children of target joint
-            ip = obj.get_index_of_selected_joints([pn])  # parent index
-            it = obj.get_index_of_selected_joints([tn])  # target index
-            ics = obj.get_index_of_selected_joints(cns)  # indices of children
+            ip = obj.get_indices_of_joints([pn])  # parent index
+            it = obj.get_indices_of_joints([tn])  # target index
+            ics = obj.get_indices_of_joints(cns)  # indices of children
 
             if len(ics) != 0:
                 for ic, cn in zip(ics, cns):
@@ -248,7 +248,7 @@ def remove_joint(obj: BVH, remove_names: Tuple[list, str], inherent='mul'):
                     Lp, Lt, Lc = o[ip], o[it], o[ic]
                     Lp, Lt, Lc = QUA(Lp), QUA(Lt), QUA(Lc)
 
-                    igs = obj.get_index_of_selected_joints(gns)
+                    igs = obj.get_indices_of_joints(gns)
                     Lg = o[igs].mean(dim=0, keepdims=True)  # get the average results as the succeeded joint's offset
                     Lg = QUA(Lg)
 

@@ -394,11 +394,12 @@ def gather_statistic(bvh_file_folder, cache_file_folder,
 
         for class_id, obj in dataset:
             if last_class_id != class_id:  # check if we are stepping into a new class
-                yield last_class_id, stat_list
+                yield last_class_id, stat_list, frames
 
                 stat_list = []
                 last_class_id = class_id
                 file_id = 0
+                frames = 0
 
             if obj.frames == 0:
                 print(f'[WARNING] frame count of bvh file {obj.filepath} is 0!')

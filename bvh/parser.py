@@ -1,5 +1,7 @@
 import re
 from collections import OrderedDict  # NOTE: since python >= 3.6, OrderedDict == dict
+import pickle
+import gzip
 
 
 class JointOffset:
@@ -126,7 +128,7 @@ class BVH:
         names = [''] + list(self.offset_data.keys())
         return [names.index(self.offset_data[e].parent_name) - 1 for e, _ in self.dfs()]
 
-    def get_index_of_selected_joints(self, joint_names: list):
+    def get_indices_of_joints(self, joint_names: list):
         """
         e.g.
             Hand:1 --- Index:2
@@ -143,7 +145,18 @@ class BVH:
         indices = [names.index(nm) for nm in joint_names]
         return indices
 
-    def to_file(self, bvh_filepath) -> None:
+    def to_file(self, bvh_filepath: str, pickle_compression=False) -> None:
+        if pickle_compression:
+            if bvh_filepath.endswith(".bvh"):
+                bvh_filepath = bvh_filepath[:-4] + '.bpk'
+            else:
+                assert bvh_filepath.endswith(".bpk"), "extension should be .bpk (bvh pickle)"
+            self._to_bpk(bvh_filepath)
+        else:
+            assert bvh_filepath.endswith(".bvh"), "extension should be .bvh"
+            self._to_bvh(bvh_filepath)
+
+    def _to_bvh(self, bvh_filepath) -> None:
         with open(bvh_filepath, 'w') as f:
             # --------------------------- OFFSET PART --------------------------- #
             f.write('HIERARCHY\n')
@@ -202,8 +215,36 @@ class BVH:
                     for j in range(channel):
                         f.write(f'{motion.data[i][j]:.6f} ')
                 f.write('\n')
+    
+    def _to_bpk(self, bvh_filepath) -> None:
+        bpk = {}
+        bpk['o'] = self.offset_data
+        bpk['m'] = self.motion_data
+        bpk['f'] = self.frames
+        bpk['t'] = self.frame_time
+        bpk['r'] = self.root_name
+        with gzip.open(bvh_filepath, "wb", compresslevel=1) as f:
+            pickle.dump(bpk, f)
+        
+    def from_file(self, bvh_filepath: str) -> None:
+        self.filepath = bvh_filepath
+        if bvh_filepath.endswith(".bvh"):
+            self._from_bvh(bvh_filepath)
+        elif bvh_filepath.endswith(".bpk"):
+            self._from_bpk(bvh_filepath)
+        else:
+            raise NotImplementedError(f"Expecting a bvh file or bpk file, but got {bvh_filepath}")
 
-    def from_file(self, bvh_filepath) -> None:
+    def _from_bpk(self, bvh_filepath) -> None:
+        with gzip.open(bvh_filepath, "rb", compresslevel=1) as f:
+            bpk = pickle.load(f)
+        self.offset_data = bpk['o']
+        self.motion_data = bpk['m']
+        self.frames = bpk['f']
+        self.frame_time = bpk['t']
+        self.root_name = bpk['r']
+
+    def _from_bvh(self, bvh_filepath) -> None:
         """
         from_file data from bvh file
         :param bvh_filepath: bvh filepath
@@ -285,3 +326,11 @@ class BVH:
         for i, (name, depth) in enumerate(self.dfs()):
             print('-'*depth, name, '----', i)
         print("<<< --- BVH topology")
+    
+    @property
+    def p_index(self):
+        return self.dfs_parent()
+
+    @property
+    def names(self):
+        return [e for e, _ in self.dfs()]

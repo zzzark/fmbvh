@@ -344,7 +344,7 @@ def get_foot_contact_point(fp: torch.Tensor, fc: torch.Tensor,
 #         'RightHand',        # 27
 #         'RightHandIndex1',  # 29
 #     ]
-#     mask = bvh_obj.get_index_of_selected_joints(cmu_mask)
+#     mask = bvh_obj.get_indices_of_joints(cmu_mask)
 #     print(mask)
 #
 #     _, qua = mot.bvh_casting.get_quaternion_from_bvh(bvh_obj)

@@ -121,7 +121,7 @@ def get_positions_from_bvh(bvh_obj: parser.BVH, locomotion=True, return_rest=Fal
     get joint positions from bvh object
     :param bvh_obj:
     :param locomotion: set root to `zero` if False
-    :return: offsets Jx3xF (joint_num, `xyz`, `frames`)
+    :return: offsets Jx3xF (joint_num, `xyz`, `frames`), [off, trs, qua]
     """
     p_index = bvh_obj.dfs_parent()
     off = get_offsets_from_bvh(bvh_obj)
