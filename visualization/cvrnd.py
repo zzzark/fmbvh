@@ -188,7 +188,7 @@ class Renderer:
             _draw_line(self.canvas, [x1, y1, z1], [x2, y2, z2], self.MVP, color, linewidth)
 
 
-def create_video_from_images(images, output_file, fps=30, size=None):
+def create_video_from_images(images, output_file, fps=30, size=None, format='avc1'):
     """
     Creates a video from a list of images.
 
@@ -206,7 +206,7 @@ def create_video_from_images(images, output_file, fps=30, size=None):
         size = (images[0].shape[1], images[0].shape[0])
     
     # Define the codec and create VideoWriter object
-    fourcc = cv.VideoWriter_fourcc(*'avc1')
+    fourcc = cv.VideoWriter_fourcc(*format)
     out = cv.VideoWriter(output_file, fourcc, fps, size)
     
     for img in images:
@@ -223,7 +223,7 @@ def create_video_from_images(images, output_file, fps=30, size=None):
 
 def render_pose(pindex, pos, output, fps=60, scale=None, 
                 cam_y=1.5, cam_r=2.0, cam_t=45.0, 
-                cam_damping=0.8):
+                cam_damping=0.8, format="avc1"):
     """
     pindex:
     pos: [J, 3, T]
@@ -278,6 +278,6 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
         rnd.end()
 
     if output:
-        create_video_from_images(images, output, fps)
+        create_video_from_images(images, output, fps, format=format)
 
     return images
