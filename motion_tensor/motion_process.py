@@ -30,15 +30,18 @@ def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sa
     return motion
 
 
-def align_root_rot(pos: torch.Tensor, root_rot, hip: tuple, sho: tuple, to_axis='Z', up_axis='Y', return_pos=False):
+def align_root_rot(pos: torch.Tensor, root_rot, hip: tuple, sho: tuple, to_axis='Z', up_axis='Y', 
+                   return_pos=False, set_pose_origin=True):
     """
     align root rotation to a certain direction (x/y/z-axis)
     :param pos:  [(B), J, 3, F], positions
     :param root_rot: [(B), 4, F], rotations
-    :param to_axis: axis to align (to face towards)
-    :param up_axis: up axis
     :param hip: (L-hip, R-hip)
     :param sho:  (L-shoulder, R-shoulder)
+    :param to_axis: axis to align (to face towards)
+    :param up_axis: up axis
+    :param return_pos: return laigned pose or not
+    :param set_pose_origin: move root to origin or not
     :return: [(B), 4, F] for new root rotation (towards `to_axis` axis), [(B), 1, F] for rotation radius along `up_axis`
     """
     assert isinstance(hip, tuple) and isinstance(sho, tuple)
@@ -69,7 +72,8 @@ def align_root_rot(pos: torch.Tensor, root_rot, hip: tuple, sho: tuple, to_axis=
     if return_pos:
         new_pos = pos - pos[..., [0], :, :]
         new_pos = rotations.rotate_vector_with_quaternion(new_pos, to_dir_qua[..., None, :, :])
-        # new_pos = new_pos + pos[..., [0], :, :]
+        if not set_pose_origin:
+            new_pos = new_pos + pos[..., [0], :, :]
         return new_root, root_eul_y, new_pos
     else:
         return new_root, root_eul_y
