@@ -23,6 +23,8 @@ class BVHSubFolder:
         import os.path as path
         for file in glob.iglob(path.join(bvh_file_folder, "*.bvh"), recursive=False):
             self.file_list.append(file)
+        for file in glob.iglob(path.join(bvh_file_folder, "*.bpk"), recursive=False):
+            self.file_list.append(file)
 
     def __len__(self):
         return len(self.file_list)

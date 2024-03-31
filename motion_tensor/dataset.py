@@ -51,11 +51,15 @@ class SimpleDatasetNoStaticNoClass(Dataset):
         print("Simple Dataset Summary === >>>")
         print(f"    frames of original data: {self.stat_dic['frames']}")
         sec = int(self.stat_dic['frames'] / fps)
-        print(f"    - duration: {timedelta(seconds=sec)}")
+        print(f"    - total duration: {timedelta(seconds=sec)}")
 
-        print(f"    frames of processed data: {len(self) * window}")
-        sec = int(len(self) * window / fps)
-        print(f"    - duration: {timedelta(seconds=sec)}")
+        if 'per_frames' in self.stat_dic:
+            ls = [str(timedelta(seconds=int(e / fps))) for e in self.stat_dic['per_frames']]
+            print(f"    - per-class duration: \n        {ls}")
+
+        # print(f"    frames of processed data: {len(self) * window}")
+        # sec = int(len(self) * window / fps)
+        # print(f"    - duration: {timedelta(seconds=sec)}")
         print("<<< === Simple Dataset Summary")
 
     

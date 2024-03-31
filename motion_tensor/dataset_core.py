@@ -433,109 +433,16 @@ def gather_statistic(bvh_file_folder, cache_file_folder,
     dic = {}
     dic_per = {}
     stat_all = []
-    total_frames = 0
+    ls_frames = []
     for cid, stat, frames in _gather_per_class():
         dic_per[cid] = collector.get_stat(cid, stat)
         stat_all += stat
-        total_frames += frames
+        ls_frames.append(frames)
     lis_all = collector.get_stat_all(stat_all)
     dic['per'] = dic_per
     dic['all'] = lis_all
-    dic['frames'] = total_frames
+    dic['frames'] = sum(ls_frames)
+    dic['per_frames'] = ls_frames
     with open(cache_file, 'wb') as f:
         torch.save(dic, f)
     return dic
-
-
-def test():
-
-    class _MyExtractor(BVHDataExtractor):
-        def __init__(self):
-            super(_MyExtractor, self).__init__(desired_frame_time=1/30.0)
-
-        def extract(self, bvh_obj: parser.BVH) -> Tuple[Tuple[torch.Tensor, ...], Tuple[torch.Tensor, ...]]:
-            (off_, tps_), (trs_, qua_) = super(_MyExtractor, self).extract(bvh_obj)
-            p_index = bvh_obj.dfs_parent()
-            pos_ = casting.get_positions_from_bvh(bvh_obj)
-            pos_ = self.scale(pos_, frame_time=bvh_obj.frame_time)
-            return (off_, tps_, p_index), (trs_, qua_, pos_)
-    
-    class _MyProcessor(MoClipProcessor):
-
-        def f_process_static(self, class_id, *args) -> tuple:
-            (off_, tps_, p_index) = args
-            return off_, tps_, p_index
-
-        def f_process_dynamic(self, class_id, *args) -> tuple:
-            (trs_, qua_, pos_) = args
-            return trs_, qua_, pos_
-
-    class _MyCollector(MoStatisticCollector):
-
-        @staticmethod
-        def __get_stat(feature: List[tuple]) -> Any:
-            # for off_, tps_, p_index, trs_, qua_, pos_ in feature:
-            p_index = feature[0][2]
-            pos_ls = [e[5] for e in feature]
-            m = torch.mean(torch.concat(pos_ls, dim=-1), dim=(-1))
-            v = torch.var(torch.concat(pos_ls, dim=-1), dim=(-1))
-            return m, v, p_index
-
-        def get_stat(self, class_id: int, feature: List[tuple]) -> Any:
-            return self.__get_stat(feature)
-        
-        def get_stat_all(self, feature: List[Tuple]) -> Any:
-            return self.__get_stat(feature)
-
-    def test_make_and_load(in_folder, out_folder):
-        divider = MotionDataDivider(64, 64, 0)
-        extractor = _MyExtractor()
-        make_mo_clip_dataset(in_folder, out_folder, extractor, divider)
-
-        processor = _MyProcessor()
-        dataset = load_mo_clip_dataset(out_folder, processor)
-
-        def run_vis():
-            from ..visualization.visualize_motion import MoVisualizer
-            for (off_, tps_, p_index, trs_, qua_, pos_, cid) in dataset:
-                def _next():
-                    f = 0
-                    while True:
-                        yield pos_[..., f].tolist()
-                        f = (f + 1) % pos_.shape[-1]
-                mvz = MoVisualizer(p_index, _next(), scale=200.0)
-                mvz.run()
-
-        run_vis()
-
-    def test_mean_and_var(in_folder, out_folder):
-        extractor = _MyExtractor()
-        processor = _MyProcessor()
-        collector = _MyCollector()
-        stat_dic = gather_statistic(in_folder, out_folder,
-                                    extractor, processor, collector)
-
-        def run_vis():
-            from ..visualization.visualize_motion import MoVisualizer
-            m, v, p_index = stat_dic["all"]
-            pos = torch.zeros(m.shape[0], m.shape[1], 100)
-            for i in range(100):
-                pos[..., i] = v * (i/99 - 0.5) * 0.01 + m
-
-            def _next():
-                f = 0
-                while True:
-                    yield pos[..., f].tolist()
-                    f = (f + 1) % pos.shape[-1]
-
-            mvz = MoVisualizer(p_index, _next(), scale=200.0)
-            mvz.run()
-
-        run_vis()
-        
-    test_make_and_load("D:/datasets/test", "D:/datasets/test.cache")
-    test_mean_and_var("D:/datasets/test", "D:/datasets/test.cache")
-
-
-if __name__ == '__main__':
-    test()
