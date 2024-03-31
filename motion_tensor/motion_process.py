@@ -184,26 +184,44 @@ def get_motion_masked(motion: torch.Tensor, mask: list) -> torch.Tensor:
     return motion[..., mask, :, :]
 
 
-def get_foot_contact(pos: torch.Tensor, ee_ids: list,
-                     ref_height: float, vel_thres=0.005,
-                     kernel_size=7):
+def get_feet_contacts(pos: torch.Tensor, ee_ids: list,
+                      ref_height: float, 
+                      criteria='pos',
+                      vel_thres=0.005,
+                      pos_thres=0.030,
+                      up_axis=1,
+                      kernel_size=7):
     """
+    get pseudo-fc labels
+
     :param pos: [..., J, 3, T]
-    :param ee_ids:
-    :param ref_height:
-    :param vel_thres:
-    :param kernel_size: kernel size for median filter
-    :return: [..., E, T] in bool type
+    :param ee_ids: end-effectors' indices
+    :param ref_height: body height
+    :param criteria: 'vel' or 'pos'
+    :param vel_thres: threshold (divided by body height)
+    :param pos_thres: threshold (divided by body height)
+    :param up_axis: up axis, x-0, y-1, z-2
+    :param kernel_size: kernel size for median filter (recommended: 11-120FPS; 7-60FPS; 5-30FPS)
+
+    :return: fc [..., E, T]  (int, 1 for contacted and 0 for not)
     """
     ee_pos = pos[..., ee_ids, :, :]  # [..., E, 3, T]
-    ee_velo = ee_pos[..., 1:] - ee_pos[..., :-1]
-    ee_velo = ee_velo / ref_height
-    ee_velo_norm = torch.norm(ee_velo, dim=-2)  # [..., E, T]
-    contact = ee_velo_norm < vel_thres
-    contact = contact.float()
-    padding = torch.zeros_like(contact[..., :1])
-    contact = torch.cat([padding, contact], dim=-1)
-
+    Y = up_axis
+    
+    if criteria == 'vel':
+        ee_velo = ee_pos[..., 1:] - ee_pos[..., :-1]
+        ee_velo = ee_velo / ref_height
+        ee_velo_norm = torch.norm(ee_velo, dim=-2)  # [..., E, T]
+        contact = ee_velo_norm < vel_thres
+        contact = contact.float()
+        padding = torch.zeros_like(contact[..., :1])
+        contact = torch.cat([padding, contact], dim=-1)
+    elif criteria == 'pos':
+        contact = (ee_pos[..., Y, :] < pos_thres * ref_height)
+        contact = contact.float()
+    else:
+        raise NotImplementedError
+    
     def __median_filter(tensor, ks, dim):
         lp = (kernel_size - 1) // 2
         rp = (kernel_size - 1) - lp
@@ -211,6 +229,7 @@ def get_foot_contact(pos: torch.Tensor, ee_ids: list,
         unfolded_tensor = padded_tensor.unfold(dim, ks, 1)
         median = unfolded_tensor.median(dim=dim).values
         return median
+    
     # filter salt and pepper noise
     if kernel_size >= 3:
         contact = __median_filter(contact, kernel_size, -1)
@@ -219,8 +238,40 @@ def get_foot_contact(pos: torch.Tensor, ee_ids: list,
 
 
 @torch.no_grad()
-def get_foot_contact_plane() -> float:
-    raise NotImplementedError
+def get_feet_grounding_shift(fp, fc, up_axis=1, iter_=2, kernel=7) -> float:
+    """
+    get how far the feet drift away from floor (return the up-axis value)
+    :param fp: [E, 3, T], original foot position
+    :param fc: [E, T], soft foot contact
+    :return [T]
+    """
+    Y = up_axis
+    T = fc.shape[-1]
+    K = kernel if kernel%2 else kernel-1
+    assert K >= 3
+    K2 = (K-1)//2
+    ikp = torch.zeros_like(fc, dtype=fp.dtype)  # ik position, [E, T]
+    mask = (fc != 0)
+    ikp[mask] = fp[:, Y, :][mask]
+    org_ikp = ikp.clone()
+
+    for _ in range(iter_):
+        tmp = torch.zeros_like(ikp)
+        for t in range(0, T):
+            for k in range(-K2, K2+1):
+                i = t+k
+                if i < 0:  i = -i
+                if i >= T: i = (T+T-1) - i
+                tmp[:, t] += ikp[:, i]
+            tmp[:, t] *= (1/K)  # mean filter
+        ikp = tmp
+        # ikp[~mask] = tmp[~mask]
+
+    # from ..visualization.nplots import visualize_arrays
+    # visualize_arrays([org_ikp, ikp])
+
+    ikp = ikp.mean(dim=0)  # [E, T] -> [T]
+    return ikp
 
 
 def __lerp(a, l, r):
@@ -232,15 +283,22 @@ def __alpha(t):
 
 
 @torch.no_grad()
-def get_foot_contact_point(fp: torch.Tensor, fc: torch.Tensor,
-                           force_on_floor=True, interp_length=10) -> torch.Tensor:
+def get_feet_contact_points(fp: torch.Tensor, fc: torch.Tensor,
+                            force_on_floor=True, interp_length=10, up_axis=1) -> torch.Tensor:
     """
-    :param fp: [E, 3, T], foot position
+    given original feet positions and contact labels, return smoothed feet positions for IK
+
+    :param fp: [E, 3, T], original foot position
     :param fc: [E, T], soft foot contact
-    :return: [E, 3, T], desired foot position on ground
-    :param force_on_floor:
+    :param force_on_floor: force the feet on floor (y=0)
     :param interp_length:
+    :param up_axis: 
+    :return: [E, 3, T], desired foot position on ground
     """
+    assert len(fp.shape) == 3, "batch not supported"
+    assert len(fc.shape) == 2, "batch not supported"
+    Y = up_axis
+
     res = []
     for pos, ctc in zip(fp.clone(), fc):
         T = ctc.shape[-1]
@@ -259,7 +317,7 @@ def get_foot_contact_point(fp: torch.Tensor, fc: torch.Tensor,
             avg /= (t - s + 1)
 
             if force_on_floor:
-                avg[1] = 0.0
+                avg[Y] = 0.0
 
             # and assign this averaged value to the window
             for j in range(s, t + 1):
@@ -311,88 +369,3 @@ def get_foot_contact_point(fp: torch.Tensor, fc: torch.Tensor,
                 pos[:, s] = ritp.clone()
 
     return torch.stack(res, dim=0)
-
-
-# def demo():
-#     import bvh
-#     a = torch.zeros((31, 3, 360))
-#     b = torch.zeros((4, 31, 4, 360))
-#
-#     # test get motion masked
-#     print(get_motion_masked(a, [0, 1, 2, 5, 7, 9]).shape)
-#     print(get_motion_masked(b, [0, 1, 2, 6, 7, 8]).shape)
-#
-#     # test get selected joints
-#     bvh_obj = bvh.parser.BVH('../data/assets/test.bvh')
-#
-#     cmu_mask = [
-#         'Hips',             # 0
-#         'LeftUpLeg',        # 2
-#         'LeftLeg',          # 3
-#         'LeftFoot',         # 4
-#         'LeftToeBase',      # 5
-#         'RightUpLeg',       # 7
-#         'RightLeg',         # 8
-#         'RightFoot',        # 9
-#         'RightToeBase',     # 10
-#         'Spine',            # 12
-#         'Spine1',           # 13
-#         'Neck1',            # 15
-#         'Head',             # 16
-#         'LeftArm',          # 18
-#         'LeftForeArm',      # 19
-#         'LeftHand',         # 20
-#         'LeftHandIndex1',   # 22
-#         'RightArm',         # 25
-#         'RightForeArm',     # 26
-#         'RightHand',        # 27
-#         'RightHandIndex1',  # 29
-#     ]
-#     mask = bvh_obj.get_indices_of_joints(cmu_mask)
-#     print(mask)
-#
-#     _, qua = mot.bvh_casting.get_quaternion_from_bvh(bvh_obj)
-#     print(get_motion_masked(qua, mask).shape)
-#
-#     # test motion sampling
-#     a = torch.zeros((31, 3, 360))
-#     b = torch.zeros((31, 4, 360))
-#
-#     print(sample_frames(a, 0.25).shape)
-#     print(sample_frames(b, 0.25).shape)
-#
-#     print(sample_frames(a, 0.25, 90).shape)
-#     print(sample_frames(b, 0.25, 90).shape)
-#
-#     print(sample_frames(a, 0.25, sampler='linear').shape)
-#     print(sample_frames(b, 0.25, sampler='linear').shape)
-#
-#     trs = torch.arange(300).view(1, 3, 100)
-#     off = calc_joint_offset(trs)
-#     trs_local = sum_joint_offset(off)
-#
-#     p0 = (0, 100, 200)
-#     o0 = (1, 1, 1)
-#     w0 = tuple([a - b for a, b in zip(p0, o0)])
-#     trs_world = sum_joint_offset(off, w0)
-#
-#     a = trs.numpy()
-#     b = off.numpy()
-#     c = trs_local.numpy()
-#     d = trs_world.numpy()
-#     print(a)
-#     print(b)
-#     print(c)
-#     print(d)
-#
-#     print((trs - trs_local).numpy())
-#     print((trs - trs_world).numpy())
-#
-#     mo = torch.arange(12).view(2, 2, 3).float()
-#     print(pad_motion(mo, 1, 2, 'constant'))
-#     print(pad_motion(mo, 2, 1, 'constant'))
-#     print(pad_motion(mo, 2, 1, 'reflect'))
-#
-#
-# if __name__ == '__main__':
-#     demo()

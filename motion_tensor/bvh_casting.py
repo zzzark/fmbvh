@@ -1,8 +1,8 @@
 import torch
 from ..bvh import parser as parser
 from .. import motion_tensor as mot
-from ..motion_tensor import rotations
-from ..motion_tensor import kinematics
+from . import rotations
+from . import kinematics
 from typing import Tuple
 
 

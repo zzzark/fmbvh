@@ -3,7 +3,9 @@ from .rotations import quaternion_to_matrix
 from .rotations import quaternion_from_two_vectors
 from .rotations import quaternion_rotate_vector_inv
 from .rotations import mul_two_quaternions
-from .motion_process import get_foot_contact_point
+from .motion_process import get_feet_contact_points
+from .motion_process import get_feet_contacts, get_feet_grounding_shift
+
 
 import torch
 from typing import Tuple
@@ -134,8 +136,10 @@ def inverse_kinematics_grad(p_index, off, trs, qua, tg_pos, ee_ids, height, sile
     return trs, qua
 
 
-def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, sin_lim=(0.4, 0.8),
+def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, sin_lim=None,
                               silence=False, iteration=10, return_pos=False):
+    # TODO: fix bugs
+    
     """
     :param p_index:
     :param off: bone offsets
@@ -145,19 +149,23 @@ def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, si
     :param ee_ids:
     :param height:
     :param sin_lim: tuple or list of tuple, rotation angle limit (sine) for each ee.
-                    pos: foot base above toe; neg: foot base below toe
+                    positive: foot base above toe; negative: foot base below toe
     :param silence:
     :param iteration:
     :param return_pos: return the target pos after ik
     :return: (trs, qua) or (trs, qua, pos)
     """
+    
+    if isinstance(sin_lim ,tuple):
+        raise NotImplementedError
     if isinstance(sin_lim, tuple) and isinstance(sin_lim[0], float):
         sin_lim = [sin_lim for _ in range(len(ee_ids))]
 
     # og_pos = forward_kinematics(p_index, qua, trs, off, True, False)
     # ik_pos = og_pos.clone()
 
-    ik_pos = forward_kinematics(p_index, qua, trs, off, True, False)
+    mat = quaternion_to_matrix(qua)
+    ik_pos = forward_kinematics(p_index, mat, trs, off, True, False)
     trs = trs.clone()
     qua = qua.clone()
 
@@ -178,6 +186,7 @@ def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, si
                 if jc == ee:
                     d = ik_pos[jp] - ik_pos[jc]  # FIXME: direction is at the fixed direction
                     ik_pos[jc] = tg_j.clone()
+                    len_off = torch.linalg.vector_norm(off[jc], dim=0).item()
 
                     # FIXME: the following code is only dedicated for handling feet
                     #        (it constraints the angle by simply compute the according y-dim value)
@@ -185,15 +194,17 @@ def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, si
                     #        for removing foot sliding artifacts, sin_lim should be a negative value
                     #        for adapting to terrain height, sin_lim can be positive
                     #        --
-                    #        we should move the code below to function `get_ik_target_pos`
-                    #        and give the terrain info to fix foot sliding & terrain adaption issues
-                    #        this requires our impl of FABRIK can handle multiple joint constraints
-                    len_off = torch.linalg.vector_norm(off[jc], dim=0).item()
-                    y_min, y_max = len_off * sin_lim[i][0], len_off * sin_lim[i][1]
-                    y_d = d[1, :]
-                    y_d[y_d < y_min] = y_min
-                    y_d[y_d > y_max] = y_max
-                    d[1, :] = y_d
+                    #        should move the code below to function `get_ik_target_pos`
+                    #        and pass the terrain info to fix foot sliding & terrain adaption issues
+                    #        this requires the impl of FABRIK can handle multiple joint constraints
+                    # >>>>
+                    if sin_lim is not None:
+                        y_min, y_max = len_off * sin_lim[i][0], len_off * sin_lim[i][1]
+                        y_d = d[1, :]
+                        y_d[y_d < y_min] = y_min
+                        y_d[y_d > y_max] = y_max
+                        d[1, :] = y_d
+                    # <<<<
                     d /= torch.linalg.vector_norm(d, dim=0)
                     d *= len_off
                 else:
@@ -251,68 +262,78 @@ def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, si
 
 def get_ik_target_pos(fc, org_pos, ee_ids, force_on_floor=True, interp_length=13):
     """
-    :param fc: (target) foot contact labels
-    :param org_pos: original full body position
-    :param ee_ids:
+    :param fc: (target) foot contact labels  [E, T]
+    :param org_pos: original full body position  [J, 3, T]
+    :param ee_ids: list
     :param force_on_floor:
     :param interp_length:
     :return: full body target position
     """
-    tg_ee_pos = get_foot_contact_point(org_pos[ee_ids], fc, force_on_floor, interp_length)  # ee target position
+    tg_ee_pos = get_feet_contact_points(org_pos[ee_ids], fc, force_on_floor, interp_length)  # ee target position
     tg_pos = org_pos.clone()
     tg_pos[ee_ids] = tg_ee_pos
     return tg_pos
 
 
-def main():
-    from motion_tensor.bvh_casting import get_quaternion_from_bvh
-    from motion_tensor.bvh_casting import get_offsets_from_bvh
-    from motion_tensor.bvh_casting import get_positions_from_bvh
-    from motion_tensor.bvh_casting import get_height_from_bvh
-    from motion_tensor.motion_process import get_foot_contact
+def easy_fix_sliding(p_index, trs, qua, off, hei, ee_ids, ft_ids, up_axis=1, fps=60, **hypers):
+    """
+    :param p_index: 
+    :param trs: [1, 3, T]
+    :param qua: [J, 4, T]
+    :param off: [J, 3, 1]
+    :param ee_ids: indices of hands, feet and head
+    :param ft_ids: indices of feet
+    :up_axis: 0-x, 1-y, 2-z
+    :fps: 
+    :hypers: 
+    :return: trs, qua
+    """
+    
+    # ---- settings ---- #
+    K = int(1+2*((fps+0.5)//15)) if 'K' not in hypers else hypers['K']
+    R = 2 if 'R' not in hypers else hypers['R']
+    pthres1 = 0.150 if 'pthres1' not in hypers else hypers['pthres1']
+    vthres1 = 0.010 if 'vthres1' not in hypers else hypers['vthres1']
+    pthres2 = 0.020 if 'pthres2' not in hypers else hypers['pthres2']
+    vthres2 = 0.005 if 'vthres2' not in hypers else hypers['vthres2']
+    cr1 = "pos" if 'cr1' not in hypers else hypers['cr1']
+    cr2 = "vel" if 'cr2' not in hypers else hypers['cr2']
 
-    from bvh.parser import BVH
+    mat = quaternion_to_matrix(qua)
+    pos = forward_kinematics(p_index, mat, trs, off, True, False)
 
-    from visualization.utils import quick_visualize as qv
-    from visualization.utils import quick_visualize_fk as qv_fk
+    # DEBUG
+    # from ..visualization.utils import quick_visualize as qv, quick_visualize_fk as qfk
+    # qv(p_index, pos, 1)
 
-    bvh = BVH(R"D:\_datasets\Motion21\xia\0\0000.bvh")
-    p_index = bvh.dfs_parent()
-    ee_head = 12
-    ee_lf, ee_rf = 4, 8
-    ee_ids = [ee_lf, ee_rf]
+    # -- softly put feet on plane -- # 
+    for r in range(R):
+        discount = 2 ** (-r/R)
+        fp = pos[ft_ids]
+        fc = get_feet_contacts(pos, ft_ids, hei, criteria=cr1, pos_thres=pthres1*discount, vel_thres=vthres1*discount, kernel_size=0)
+        sft = get_feet_grounding_shift(fp, fc, up_axis=up_axis, kernel=K+4, iter_=5)
+        trs[0, up_axis] -= sft
+        pos[:, up_axis, :] -= sft
 
-    off = get_offsets_from_bvh(bvh)
-    trs, qua = get_quaternion_from_bvh(bvh)
-    pos = get_positions_from_bvh(bvh, True)
-    hei = get_height_from_bvh(bvh, ee_head, ee_lf)
-    print(f"height: {hei}")
-    # qv(p_index, pos)
+    # get fc
+    if True:
+        fp = pos[ft_ids]
+        fc = get_feet_contacts(pos, ft_ids, hei, criteria=cr2, pos_thres=pthres2, vel_thres=vthres2, kernel_size=K)
+        sft = get_feet_grounding_shift(fp, fc, up_axis=up_axis, kernel=K+4, iter_=5)
+        trs[0, up_axis] -= sft
+        pos[:, up_axis, :] -= sft
+    fp = pos[ft_ids]
+    fc = get_feet_contacts(pos, ft_ids, hei, criteria=cr2, pos_thres=pthres2, vel_thres=vthres2, kernel_size=K)
+    
+    # get target pos
+    tg_pos = get_ik_target_pos(fc, pos, ft_ids, interp_length=K+4)
 
-    fc = get_foot_contact(pos, ee_ids, hei)
-    tg_pos = get_ik_target_pos(fc, pos, ee_ids)
-    # qv(p_index, tg_pos)
+    # DEBUG
+    # qv(p_index, tg_pos, 1)
+    
+    ik_trs, ik_qua = inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ft_ids, hei, return_pos=False, silence=True)
 
-    # print(" ========== GRAD ======== ")
-    # ik_trs, ik_qua = inverse_kinematics_grad(p_index, off, trs, qua, tg_pos, ee_ids, hei)
-    # ik_pos = forward_kinematics(p_index, ik_qua, ik_trs, off, True, False)
-    # qv(p_index, ik_pos)
+    # DEBUG
+    # qfk(p_index, off, ik_qua, ik_trs, 1)
 
-    print(" ========= FABRIK ========= ")
-    # ik_pos = inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, hei)
-    ik_trs, ik_qua, ret_pos = inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, hei, return_pos=True)
-    ik_pos = forward_kinematics(p_index, ik_qua, ik_trs, off, True, False)
-
-    # print(ret_pos.shape, ik_pos.shape)
-    # ret_pos = ret_pos[..., ::6]
-    # ik_pos = ik_pos[..., ::6]
-    def __callback_1(*args):
-        pass
-    def __callback_2(*args):
-        pass
-    # qv(p_index, ret_pos, callback_fn=__callback_1)
-    qv(p_index, ik_pos, callback_fn=__callback_2)
-
-
-if __name__ == '__main__':
-    main()
+    return ik_trs, ik_qua
