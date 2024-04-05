@@ -238,7 +238,7 @@ def get_feet_contacts(pos: torch.Tensor, ee_ids: list,
 
 
 @torch.no_grad()
-def get_feet_grounding_shift(fp, fc, up_axis=1, iter_=2, kernel=7) -> float:
+def get_feet_grounding_shift(fp, fc, up_axis=1, iter_=2, kernel=7, gather="mean") -> float:
     """
     get how far the feet drift away from floor (return the up-axis value)
     :param fp: [E, 3, T], original foot position
@@ -269,8 +269,12 @@ def get_feet_grounding_shift(fp, fc, up_axis=1, iter_=2, kernel=7) -> float:
 
     # from ..visualization.nplots import visualize_arrays
     # visualize_arrays([org_ikp, ikp])
-
-    ikp = ikp.mean(dim=0)  # [E, T] -> [T]
+    if gather == "mean":
+        ikp = ikp.mean(dim=0)  # [E, T] -> [T]
+    elif gather == "min":
+        ikp = ikp.min(dim=0)[0]  # [E, T] -> [T]
+    else:
+        raise NotImplementedError
     return ikp
 
 

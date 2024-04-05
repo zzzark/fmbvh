@@ -136,7 +136,7 @@ def inverse_kinematics_grad(p_index, off, trs, qua, tg_pos, ee_ids, height, sile
     return trs, qua
 
 
-def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, sin_lim=None,
+def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, sin_lim=(0.2, 0.6),
                               silence=False, iteration=10, return_pos=False):
     # TODO: fix bugs
     
@@ -156,8 +156,9 @@ def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, si
     :return: (trs, qua) or (trs, qua, pos)
     """
     
-    if isinstance(sin_lim ,tuple):
-        raise NotImplementedError
+    # if isinstance(sin_lim ,tuple):
+    #     raise NotImplementedError
+    # TODO: only limits those with fc==1
     if isinstance(sin_lim, tuple) and isinstance(sin_lim[0], float):
         sin_lim = [sin_lim for _ in range(len(ee_ids))]
 
@@ -168,9 +169,6 @@ def inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ee_ids, height, si
     ik_pos = forward_kinematics(p_index, mat, trs, off, True, False)
     trs = trs.clone()
     qua = qua.clone()
-
-    def __bone_len(bn):
-        return (((bn ** 2.0).sum(dim=-2)) ** 0.5)
 
     for t in range(iteration):
         for i, ee in enumerate(ee_ids):
@@ -298,6 +296,7 @@ def easy_fix_sliding(p_index, trs, qua, off, hei, ee_ids, ft_ids, up_axis=1, fps
     vthres2 = 0.005 if 'vthres2' not in hypers else hypers['vthres2']
     cr1 = "pos" if 'cr1' not in hypers else hypers['cr1']
     cr2 = "vel" if 'cr2' not in hypers else hypers['cr2']
+    gather = "mean" if "gather" not in hypers else hypers['gather']
 
     mat = quaternion_to_matrix(qua)
     pos = forward_kinematics(p_index, mat, trs, off, True, False)
@@ -311,7 +310,7 @@ def easy_fix_sliding(p_index, trs, qua, off, hei, ee_ids, ft_ids, up_axis=1, fps
         discount = 2 ** (-r/R)
         fp = pos[ft_ids]
         fc = get_feet_contacts(pos, ft_ids, hei, criteria=cr1, pos_thres=pthres1*discount, vel_thres=vthres1*discount, kernel_size=0)
-        sft = get_feet_grounding_shift(fp, fc, up_axis=up_axis, kernel=K+4, iter_=5)
+        sft = get_feet_grounding_shift(fp, fc, up_axis=up_axis, kernel=K+4, iter_=5, gather=gather)
         trs[0, up_axis] -= sft
         pos[:, up_axis, :] -= sft
 
@@ -319,7 +318,7 @@ def easy_fix_sliding(p_index, trs, qua, off, hei, ee_ids, ft_ids, up_axis=1, fps
     if True:
         fp = pos[ft_ids]
         fc = get_feet_contacts(pos, ft_ids, hei, criteria=cr2, pos_thres=pthres2, vel_thres=vthres2, kernel_size=K)
-        sft = get_feet_grounding_shift(fp, fc, up_axis=up_axis, kernel=K+4, iter_=5)
+        sft = get_feet_grounding_shift(fp, fc, up_axis=up_axis, kernel=K+4, iter_=5, gather=gather)
         trs[0, up_axis] -= sft
         pos[:, up_axis, :] -= sft
     fp = pos[ft_ids]
@@ -330,8 +329,8 @@ def easy_fix_sliding(p_index, trs, qua, off, hei, ee_ids, ft_ids, up_axis=1, fps
 
     # DEBUG
     # qv(p_index, tg_pos, 1)
-    
-    ik_trs, ik_qua = inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ft_ids, hei, return_pos=False, silence=True)
+    sin_lim = None if 'sin_lim' not in hypers else hypers['sin_lim']
+    ik_trs, ik_qua = inverse_kinematics_fabrik(p_index, off, trs, qua, tg_pos, ft_ids, hei, return_pos=False, silence=True, sin_lim=sin_lim)
 
     # DEBUG
     # qfk(p_index, off, ik_qua, ik_trs, 1)
