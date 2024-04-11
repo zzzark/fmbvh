@@ -48,8 +48,6 @@ def forward_kinematics(parent_index: list, mat3x3: torch.Tensor,
     if root_pos is not None:
         root_pos = root_pos.permute(0, 3, 1, 2)[..., None]  # root:   [B, F, 1, 3, 1]
 
-    mat_mix = torch.empty_like(mat3x3, dtype=mat3x3.dtype, device=mat3x3.device)  # avoid in-place operation
-
     position = torch.empty((B, F, J, 3, 1), device=offset.device)  # [B, F, J, 3, 1]
 
     if root_pos is not None:
@@ -57,20 +55,22 @@ def forward_kinematics(parent_index: list, mat3x3: torch.Tensor,
     else:
         position[..., 0, :, :].zero_()
 
-    mat_mix[..., 0, :, :] = mat3x3[..., 0, :, :]
+    mat_mix = [None for _ in range(J)]
+    mat_mix[0] = mat3x3[..., 0, :, :]
+
     for ci, pi in enumerate(parent_index[1:], 1):
         off_i = offset[..., ci, :, :]
 
         if not is_edge:
-            mat_p = mat_mix[..., pi, :, :]
+            mat_p = mat_mix[pi]
             trs_i = torch.matmul(mat_p, off_i)
             position[..., ci, :, :] = trs_i
-            mat_mix[..., ci, :, :] = torch.matmul(mat_p, mat3x3[..., ci, :, :])
+            mat_mix[ci] = torch.matmul(mat_p, mat3x3[..., ci, :, :])
         else:
-            combo = torch.matmul(mat_mix[..., pi, :, :], mat3x3[..., ci, :, :])
+            combo = torch.matmul(mat_mix[pi], mat3x3[..., ci, :, :])
             trs_i = torch.matmul(combo, off_i)
             position[..., ci, :, :] = trs_i
-            mat_mix[..., ci, :, :] = combo
+            mat_mix[pi] = combo
 
         if world:
             position[..., ci, :, :] += position[..., pi, :, :]

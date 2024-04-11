@@ -142,14 +142,16 @@ class Renderer:
     def draw_grid(self, count=9, unit=0.2):
         mvp = self.MVP
         for x in range(-count//2, count//2+1):
-            a = [x*unit, 0.0, -unit*(count/2+1)]
-            b = [x*unit, 0.0, +unit*(count/2+1)]
-            _draw_line(self.canvas, a, b, mvp, (200, 200, 200), 1)
+            for z in range(-count//2, count//2+1):
+                a = [x*unit, 0.0, unit*(z-0.5)]
+                b = [x*unit, 0.0, unit*(z+0.5)]
+                _draw_line(self.canvas, a, b, mvp, (200, 200, 200), 1)
 
         for z in range(-count//2, count//2+1):
-            a = [-unit*(count/2+1), 0.0, z*unit]
-            b = [+unit*(count/2+1), 0.0, z*unit]
-            _draw_line(self.canvas, a, b, mvp, (200, 200, 200), 1)
+            for x in range(-count//2, count//2+1):
+                a = [unit*(x-0.5), 0.0, z*unit]
+                b = [unit*(x+0.5), 0.0, z*unit]
+                _draw_line(self.canvas, a, b, mvp, (200, 200, 200), 1)
 
     def draw_cube(self):
         a = [-1.0, -1.0, -1.0]
@@ -253,29 +255,60 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
 
     images = []
     rnd = Renderer()
-    for t in tqdm(range(T)):
-        lines = []
-        for j in range(J):
-            p = pindex[j]
-            if p < 0: continue
-            lines.append([pos[p, :, t].tolist(), pos[j, :, t].tolist()])
-        rnd.begin()
+    loop = output is None
+    pause = False
 
-        tgt = cam_damping * tgt + (1-cam_damping) * target[:, t]
-        rnd.camera_follow(tgt, cam_r, cam_t/180*3.14, cam_y)
+    bar = tqdm(range(T)) if output is not None else None
+    while loop:
+        t = 0
+        while t < T:
+            if bar is not None:
+                next(bar)
+            lines = []
+            for j in range(J):
+                p = pindex[j]
+                if p < 0: continue
+                lines.append([pos[p, :, t].tolist(), pos[j, :, t].tolist()])
+            rnd.begin()
 
-        rnd.draw_grid(count=19, unit=0.2)
-        rnd.draw_origin()
+            tgt = cam_damping * tgt + (1-cam_damping) * target[:, t]
+            rnd.camera_follow(tgt, cam_r, cam_t/180*3.14, cam_y)
 
-        rnd.render(lines)
-        # rnd.draw_cube()
+            rnd.draw_grid(count=19, unit=0.2)
+            rnd.draw_origin()
 
-        images.append(rnd.canvas.copy())
-        if not output:
-            cv.imshow('cap', rnd.canvas)
-            cv.waitKey(1000//fps)
-            # cv.waitKey(-1)
-        rnd.end()
+            rnd.render(lines)
+            # rnd.draw_cube()
+
+            if output is None:
+                cv.imshow('cap', rnd.canvas)
+                key = cv.waitKey(1000//fps)
+                if key & 0xFF == ord('q'):
+                    loop = False
+                    break
+                elif key & 0xFF == ord(' '):
+                    pause = not pause
+                elif key & 0xFF == ord('['):
+                    t -= 1
+                elif key & 0xFF == ord(']'):
+                    t += 1
+                elif key & 0xFF == ord('a'):
+                    cam_t -= 1
+                elif key & 0xFF == ord('d'):
+                    cam_t += 1
+                elif key & 0xFF == ord('s'):
+                    cam_y -= 0.1
+                elif key & 0xFF == ord('w'):
+                    cam_y += 0.1
+                elif key & 0xFF == ord('z'):
+                    cam_r -= 0.1
+                elif key & 0xFF == ord('x'):
+                    cam_r += 0.1
+            else:
+                images.append(rnd.canvas.copy())
+            rnd.end()
+            if not pause:
+                t += 1
 
     if output:
         create_video_from_images(images, output, fps, format=format)

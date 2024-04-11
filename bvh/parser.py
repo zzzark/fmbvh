@@ -334,3 +334,8 @@ class BVH:
     @property
     def names(self):
         return [e for e, _ in self.dfs()]
+
+    @property
+    def fps(self):
+        if self.frame_time == 0: return -1
+        else: return int(1.0 / self.frame_time + 0.5)

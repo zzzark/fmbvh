@@ -326,6 +326,18 @@ def normalize_quaternion(qua: torch.Tensor) -> torch.Tensor:
     assert qua.shape[-2] == 4
     return normalize_vector(qua)
 
+    # FIXME
+    l = (((qua ** 2).sum(dim=-2, keepdim=True)) ** 0.5).broadcast_to(qua.shape)
+    zero = (l < 1e-8)
+    qua[~zero] /= l[~zero]
+    w = zero.clone()
+    w[..., 1:, :] = False
+    xyz = zero.clone()
+    xyz[..., 0, :] = False
+    qua[xyz] = 0.0
+    assert ((norm_of_quaternion(qua) == 0.0).float().sum()).item() == 0.0
+    return qua
+
     # --- legacy impl --- #
     # """
     # normalize quaternion
@@ -399,8 +411,7 @@ def quaternion_from_two_vectors(v0: torch.Tensor, v1: torch.Tensor) -> torch.Ten
     dot = torch.sum(v0 * v1, dim=-2, keepdim=True)
     w = l0*l1 + dot
     qua = torch.cat([w, a], dim=-2)
-    qua = torch.nn.functional.normalize(qua, p=2.0, dim=-2)
-    return qua
+    return normalize_quaternion(qua)
 
 
 def quaternion_rotate_vector(q, v) -> torch.Tensor:
@@ -623,7 +634,7 @@ def __rotate_at(q, p, indices=None):
     return old_p
 
 
-def __get_children(p_index, cur_index) -> list:
+def __get_chain(p_index, cur_index) -> list:
     """
     get kinematic chain (all children of cur_index excludes cur_index)
     """
@@ -637,7 +648,7 @@ def __get_children(p_index, cur_index) -> list:
 
 def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iterative_EMA'):
     """
-    a simplified version of multi-target IK
+    a simplified version for multi-target IK, to get the rotation of the joint i to align its children joints 
     :param offset: [J, 3, F]
     :param target: [J, 3, F]
     :param p_index: parent's indices
@@ -663,6 +674,34 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         rot = quaternion_from_two_vectors(a, b)
         return rot
     
+    if multiple_children_solver == "default":
+        raise NotImplementedError
+        off_ls = []
+        tgt_ls = []
+        for c in children:
+            a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+            b = target[[c], :, :]
+            off_ls.append(a)
+            tgt_ls.append(b)
+
+        if len(children) == 2:  # pad rank to 3
+            xa = torch.cross(off_ls[0], off_ls[1], dim=-2)
+            xb = torch.cross(tgt_ls[0], tgt_ls[1], dim=-2)
+            off_ls.append(xa)
+            tgt_ls.append(xb)
+        
+        A = torch.concat(off_ls, dim=0)
+        B = torch.concat(tgt_ls, dim=0)
+
+        # TODO
+        M = A @ B.T
+        U, S, V = torch.svd(M)
+        R = U @ V
+        if R.det() < 0:  # det == -1
+            U[:, 2].neg_()
+            R = U @ V
+        return R
+
     # solve multiple children
     if multiple_children_solver == "slerp":
         r_ls = []
@@ -749,6 +788,7 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
                 aa = tgt - __dot(axis, tgt) * axis
                 bb = off - __dot(axis, off) * axis
                 cos = __dot(normalize_vector(aa), normalize_vector(bb))
+                torch.clamp_(cos, -1, 1)
                 cos_ls.append(cos)
         cos = torch.stack(cos_ls, dim=0).mean(dim=0, keepdim=False)
         t2 = torch.arccos(cos) * 0.5  # theta / 2
@@ -758,7 +798,7 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         x = axis[:, [0], :] * s2
         y = axis[:, [1], :] * s2
         z = axis[:, [2], :] * s2
-        corr = torch.concatenate([w, x, y, z], dim=-2)  # corrective
+        corr = torch.concat([w, x, y, z], dim=-2)  # corrective
         rot = mul_two_quaternions(corr, rot)
         return rot
     elif multiple_children_solver == "slerp_after_inf":
@@ -784,10 +824,8 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
             rot = None
             axis = None
             cos_ls = []
-            visit_seq = list(range(N))
-            visit_seq.remove(k)
-            visit_seq = [k] + visit_seq
-            for i in visit_seq:
+            for i in range(N):
+                i = (i + k) % N
                 off = off_ls[i]
                 tgt = tgt_ls[i]
 
@@ -799,17 +837,18 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
                     aa = tgt - __dot(axis, tgt) * axis
                     bb = off - __dot(axis, off) * axis
                     cos = __dot(normalize_vector(aa), normalize_vector(bb))
-                    cos_ls.append(cos)
-            # average them since the results may differ due to mismatched skeletons
-            cos = torch.stack(cos_ls, dim=0).mean(dim=0, keepdim=False)
-            t2 = torch.arccos(cos) * 0.5  # theta / 2
+                    torch.clamp_(cos, -1, 1)
+                    cos_ls.append(torch.arccos(cos))
+            theta = torch.stack(cos_ls, dim=0).mean(dim=0, keepdim=False)
+            # t2 = torch.arccos(cos) * 0.5  # theta / 2
+            t2 = theta * 0.5  # theta / 2
             c2 = torch.cos(t2)  # cos (theta / 2)
             s2 = torch.sin(t2)  # sin (theta / 2)
             w = c2
             x = axis[:, [0], :] * s2
             y = axis[:, [1], :] * s2
             z = axis[:, [2], :] * s2
-            corr = torch.concatenate([w, x, y, z], dim=-2)  # corrective
+            corr = torch.concat([w, x, y, z], dim=-2)  # corrective
             rot = mul_two_quaternions(corr, rot)
             rot_ls.append(rot)
         return slerp_n(*rot_ls)
@@ -817,7 +856,7 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         raise NotImplementedError(f"unknown value: {multiple_children_solver}")
 
 
-def get_quat_from_pos(p_index, target, offset):
+def get_quat_from_pos(p_index, target, offset, solver='iterative_EMA'):
     """
     Debug & Example:
     ```
@@ -834,15 +873,29 @@ def get_quat_from_pos(p_index, target, offset):
     """
     assert p_index[0] < 0  # 0 should be the root
     
+    target = target.clone()
+    offset = offset.clone()
     trans = target[[0], :, :].clone()
     target = target - trans
     quats = []
     for c, p in enumerate(p_index):
-        children = __get_children(p_index, c)
-        if p >= 0:  # assert p_offset == (0, 0, 0)
-            target[children] -= offset[[c]]
-        q = __get_rotation_at(offset, target, p_index, c)
-        target = __rotate_at(inverse_quaternion(q), target, children)
+        # # DEBUG
+        # if c >= 1:
+        #     q = torch.zeros(1, 4, trans.shape[-1])
+        #     q[:, 0, :] = 0.0
+        #     quats.append(q)
+        #     continue
+
+        children = __get_chain(p_index, c)
+        if p >= 0:
+            target[children] -= target[[c]]  # offset[[c]]  # <-- when the T pose differs greatly from the target's the result may be twisted
+        # else
+        #   assert p_offset == (0, 0, 0)
+        q = __get_rotation_at(offset, target, p_index, c, solver)
+        q = normalize_quaternion(q)
+        q = rectify_w_of_quaternion(q)
+        inv_q = conjugate_quaternion(q)
+        target = __rotate_at(inv_q, target, children)
         quats.append(q)
 
         # by FK formula: (t: target, q: quaternion, o: offset) 
@@ -852,5 +905,41 @@ def get_quat_from_pos(p_index, target, offset):
         # t3 = q0 (o1 + q1 (o2 + q2 o3))
         # ...
     
-    quats = torch.concatenate(quats, dim=0)
+    quats = torch.concat(quats, dim=0)
     return trans, quats
+
+
+def to_xyzw(qua: torch.Tensor, dim=-2) -> torch.Tensor:
+    """
+    convert from wxyz (default layout) to xyzw
+    """
+    assert qua.shape[dim] == 4
+    num_dims = qua.dim()
+    slices = [slice(None)] * num_dims
+    sw = slices.copy()
+    sxyz = slices.copy()
+    sw[dim] = slice(0, 1)
+    sxyz[dim] = slice(1, 4)
+
+    w = qua[sw]
+    xyz = qua[sxyz]
+    qua = torch.concat([xyz, w], dim=dim)
+    return qua
+
+
+def to_wxyz(qua: torch.Tensor, dim=-2) -> torch.Tensor:
+    """
+    convert from xyzw to wxya (default layout)
+    """
+    assert qua.shape[dim] == 4
+    num_dims = qua.dim()
+    slices = [slice(None)] * num_dims
+    sw = slices.copy()
+    sxyz = slices.copy()
+    sw[dim] = slice(3, 4)
+    sxyz[dim] = slice(0, 3)
+
+    w = qua[sw]
+    xyz = qua[sxyz]
+    qua = torch.concat([w, xyz], dim=dim)
+    return qua
