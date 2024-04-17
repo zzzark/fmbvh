@@ -4,6 +4,7 @@
 import torch
 import torch.nn.functional as F
 from . import rotations
+from .rotations import slerp
 
 
 def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sampler='nearest'):
@@ -27,6 +28,43 @@ def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sa
         motion = F.interpolate(motion, size=target_frame, recompute_scale_factor=False, scale_factor=None, mode=sampler)
 
     return motion
+
+
+def sample_quat(quat: torch.Tensor, scale_factor=None, target_frame=None, sampler='linear', dim=-1):
+    assert False  # check
+
+    """
+    sample with quat
+    :param motion: JxCxF   (J: num_joints; C: channel, 3(euler, position) or 4(quaternion); F: num_frames)
+    :param scale_factor: source_frame_time / target_frame_time
+    :param target_frame: how many frames are needed
+                         NOTE: if scale_factor is not none, another interpolate will be applied
+                               to obtain `target_frame` frames
+    :param sampler: 'nearest', 'linear', etc.
+    :return:
+    """
+    if dim < 0:
+        dim = len(quat.shape) + dim
+        assert dim >= 0
+    
+    def __t(i):
+        # make slice [..., i, ...]
+        return [slice(None) if j != dim else i for j in range(len(quat.shape))]
+
+    srcT = quat.shape[dim]
+    dstT = int(srcT * scale_factor) if scale_factor is not None else (target_frame if target_frame is not None else -1)
+    assert dstT > 0
+    idx = torch.arange(0, dstT, 1, device=quat.device, dtype=quat.dtype)
+    idx = F.interpolate(idx, size=dstT, recompute_scale_factor=False, scale_factor=None, mode=sampler)
+    output = torch.empty((*quat.shape[:dim], dstT, *quat.shape[dim+1:]), device=quat.device, dtype=quat.dtype)
+
+    # TODO: loop unrolling
+    for t in range(dstT):
+        a = int(t)
+        b = a + 1
+        w = t - a
+        output[__t(t)] = slerp(quat[__t(a)], quat[__t(b)], w)
+    return output
 
 
 def align_root_rot(pos: torch.Tensor, root_rot, hip: tuple, sho: tuple, to_axis='Z', up_axis='Y', 

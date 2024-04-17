@@ -33,6 +33,46 @@ class JointMotion:
         self.data = [] if motion is None else motion.copy()
 
 
+class BVHInfo:
+    """
+    only load the meta data of a *.bvh file
+    """
+    def __init__(self, bvh_filepath=""):
+        self.frames = 0
+        self.frame_time = 0.0
+        if bvh_filepath:
+            self.from_file(bvh_filepath)
+    
+    def from_file(self, bvh_filepath):
+        info_counter = 0
+        info_max = 2
+        with open(bvh_filepath) as f:
+            for file_line in f:
+                file_line = file_line.strip()
+                if file_line == '':
+                    continue
+
+                split_words = re.split(r'\s+', file_line)
+                split_words[0] = split_words[0].upper()
+
+                if split_words[0] == 'FRAMES:':
+                    self.frames = int(split_words[1])
+                    info_counter += 1
+                elif split_words[0] == 'FRAME' and split_words[1].upper() == 'TIME:':
+                    self.frame_time = float(split_words[2])
+                    info_counter += 1
+                if info_counter >= info_max:
+                    break
+
+    @property
+    def fps(self):
+        if self.frame_time == 0: return -1
+        else: return int(1.0 / self.frame_time + 0.5)
+
+    # TODO
+    # names, offsets, p_index, and more ...
+
+
 class BVH:
     """
     a BVH object is used to from_file a *.bvh file, parse it, and store the results
