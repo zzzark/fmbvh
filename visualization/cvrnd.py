@@ -255,7 +255,7 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
 
     images = []
     rnd = Renderer()
-    loop = output is None
+    loop = True
     pause = False
 
     bar = tqdm(range(T)) if output is not None else None
@@ -263,7 +263,7 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
         t = 0
         while t < T:
             if bar is not None:
-                next(bar)
+                bar.update(t)
             lines = []
             for j in range(J):
                 p = pindex[j]
@@ -309,7 +309,12 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
             rnd.end()
             if not pause:
                 t += 1
+        if output is not None:
+            loop = False
 
+    if bar is not None:
+        bar.close()
+    
     if output:
         create_video_from_images(images, output, fps, format=format)
 
