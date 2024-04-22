@@ -65,6 +65,9 @@ class MotionDataDivider:
         self.skip = skip
 
     def divide(self, motion: torch.Tensor) -> List[torch.Tensor]:
+        if self.window <= 0 or self.window_step <= 0:  # do not divide
+            return [motion]
+
         K, S, W = self.skip, self.window_step, self.window
         motion = motion[..., K:]
         clip_list = []

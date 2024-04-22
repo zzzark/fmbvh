@@ -36,7 +36,8 @@ class SimpleDatasetNoStaticNoClass(Dataset):
     def __init__(self, 
                  in_folder, out_folder,
                  fps, proc_fn, 
-                 window, window_step,
+                 window, window_step, skip=0,
+                 divider_override=None,  # override for handling flip
                  *args, **kwargs):
         super().__init__(*args, **kwargs)
         
@@ -44,7 +45,11 @@ class SimpleDatasetNoStaticNoClass(Dataset):
         self.stat_dic = gather_statistic(in_folder, out_folder, self.extractor, self.__SimpleProcessor(), self.__SimpleCollector())
 
         # NOTE: can be normalized when saving
-        make_mo_clip_dataset(in_folder, out_folder, self.extractor, MotionDataDivider(window, window_step, skip=0))
+        if divider_override is not None:
+            assert isinstance(divider_override, MotionDataDivider)
+        else:
+            divider_override = MotionDataDivider(window, window_step, skip=skip)
+        make_mo_clip_dataset(in_folder, out_folder, self.extractor, divider_override)
         self.dataset = load_mo_clip_dataset(out_folder, self.__SimpleProcessor())
 
         from datetime import timedelta
