@@ -1,7 +1,8 @@
 from .parser import BVH, JointOffset, JointMotion
+from collections import OrderedDict  # NOTE: since python >= 3.6, OrderedDict == dict
 import itertools
 from copy import deepcopy
-from typing import Tuple
+from typing import Tuple, List
 import torch
 from ..motion_tensor import rotations as mor
 from ..motion_tensor import bvh_casting as bvc
@@ -9,7 +10,7 @@ from ..motion_tensor import bvh_casting as bvc
 
 def reorder_bvh(obj: BVH):
     """
-    this function is to reorder the offset_data and motion_data,
+    reorder the offset_data and motion_data inplace (i.e. it will modify the `obj` object),
     since both of them use `OrderedDict` to store data and thus
     their keys need to be reordered after inserting or deleting
     some joints
@@ -20,6 +21,36 @@ def reorder_bvh(obj: BVH):
     for name in dfs:
         obj.offset_data.move_to_end(name)
         obj.motion_data.move_to_end(name)
+    return obj
+
+
+def build_bvh_from_scratch(p_index, bone_names, fps) -> BVH:
+    """
+    :param p_index: parent indices that determines the topology
+    :param bone_names: bone names
+    :param fps: frames per second, fps == 1.0 / frame_time
+    """
+    obj = BVH()
+    obj.offset_data = OrderedDict()
+    obj.motion_data = OrderedDict()
+    obj.frames = 0
+    obj.frame_time = 1.0 / fps
+    obj.root_name = bone_names[0]
+    obj.filepath = ""
+    for i, name in enumerate(bone_names):
+        if p_index[i] < 0:
+            p_name = ""
+            order = "XYZZYX"
+            channel = 6
+        else:
+            p_name = bone_names[p_index[i]]
+            order = "ZYX"
+            channel = 3
+
+        c_names = [bone_names[e] for e in range(len(p_index)) if p_index[e] == i]
+        obj.offset_data[name] = JointOffset(name, p_name, c_names, [1, 1, 1], channel, order)  # set default bone offset to [1, 1, 1]
+        obj.motion_data[name] = JointMotion(name, [])
+    obj = reorder_bvh(obj)
     return obj
 
 

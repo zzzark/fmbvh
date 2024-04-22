@@ -108,25 +108,6 @@ class BVH:
         if bvh_filepath:
             self.from_file(bvh_filepath)
 
-    def build_skeleton_from_scratch(self, p_index, bone_names, bone_offs, fps):
-        self.frames = 0
-        self.frame_time = 1.0 / fps
-        self.root_name = bone_names[0]
-        self.filepath = ""
-        for i, name in enumerate(bone_names):
-            if p_index[i] < 0:
-                p_name = ""
-                order = "XYZZYX"
-                channel = 6
-            else:
-                p_name = bone_names[p_index[i]]
-                order = "ZYX"
-                channel = 3
-
-            c_names = [bone_names[e] for e in range(len(p_index)) if p_index[e] == i]
-            self.offset_data[name] = JointOffset(name, p_name, c_names, bone_offs[i], channel, order)
-            self.motion_data[name] = JointMotion(name, [])
-
     @property
     def rotation_order(self):
         """
