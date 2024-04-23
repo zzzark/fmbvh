@@ -1,17 +1,17 @@
 # O3D (LEGACY)
-fn_dummy = lambda *_: None
+fn_dummy = lambda *_, **__: None
 
 try:
     from .o3drnd import quick_visualize, quick_visualize_fk
 except ImportError as e:
-    print(e)
+    print(e, ", omitting it")
     quick_visualize, quick_visualize_fk = fn_dummy, fn_dummy
 
 # OPENCV
 try:
     from .cvrnd import render_pose
 except ImportError as e:
-    print(e)
+    print(e, ", omitting it")
     render_pose = fn_dummy
 
 
