@@ -48,12 +48,15 @@ def _look_at(eye, at):
     x_axis = x_axis / np.linalg.norm(x_axis)
 
     y_axis = np.cross(z_axis, x_axis)
-    return np.array([
+    ret = np.array([
         [           x_axis[0],            y_axis[0],            z_axis[0],  0.0],
         [           x_axis[1],            y_axis[1],            z_axis[1],  0.0],
         [           x_axis[2],            y_axis[2],            z_axis[2],  0.0],
         [-np.dot(x_axis, eye), -np.dot(y_axis, eye), -np.dot(z_axis, eye),  1.0]
     ]).T
+    if np.isnan(ret).any():  # invalid axis
+        ret = np.eye(4)
+    return ret
 
 
 def _draw_point(canvas: np.ndarray, xyz: list, mvp_mtx: np.ndarray, radius=4, color=(0,0,255), thickness=-1):
@@ -78,7 +81,7 @@ def _draw_line(canvas: np.ndarray, xyz1: list, xyz2: list, mvp_mtx: np.ndarray, 
     x2, y2, z2 = txyzw2[:3, 0] / w2
 
     # illegal points (outside the frustum)
-    if abs(w1) < 1e-5 or abs(w2) < 1e-5:
+    if abs(w1) < 1e-5 or abs(w2) < 1e-5 or np.isnan(w1) or np.isnan(w2):
         return canvas
 
     # simplified frustum clipping (z)
@@ -246,7 +249,7 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
     if scale is None:
         scale = (pos[:, 1, :].max() - pos[:, 1, :].min())
 
-    pos = pos / (scale)
+    pos = pos / scale if scale > 0.0 else pos
     
     J, _, T = pos.shape
 
