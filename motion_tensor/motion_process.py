@@ -7,7 +7,7 @@ from . import rotations
 from .rotations import slerp
 
 
-def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sampler='nearest'):
+def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sampler='nearest', align_corners=False):
     """
     upsample a given rotation to a certain frame_time or scale_factor
     :param motion: JxCxF   (J: num_joints; C: channel, 3(euler, position) or 4(quaternion); F: num_frames)
@@ -22,10 +22,10 @@ def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sa
     assert len(motion.shape) == 3, 'sample_frames: input should be [J, C, F]'
 
     if scale_factor is not None and abs(scale_factor - 1.0) > 1e-3:
-        motion = F.interpolate(motion, size=None, recompute_scale_factor=False, scale_factor=scale_factor, mode=sampler)
+        motion = F.interpolate(motion, size=None, recompute_scale_factor=False, scale_factor=scale_factor, mode=sampler, align_corners=align_corners)
 
     if target_frame is not None and motion.shape[-1] != target_frame:  # frames not aligned yet
-        motion = F.interpolate(motion, size=target_frame, recompute_scale_factor=False, scale_factor=None, mode=sampler)
+        motion = F.interpolate(motion, size=target_frame, recompute_scale_factor=False, scale_factor=None, mode=sampler, align_corners=align_corners)
 
     return motion
 
