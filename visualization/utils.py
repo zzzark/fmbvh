@@ -15,7 +15,7 @@ except ImportError as e:
     render_pose = fn_dummy
 
 
-def show_bvh(bvh_file, scale=200, backend_cv=False):
+def show_bvh(bvh_file, scale=None, backend_cv=False, **kwargs):
     from ..bvh.parser import BVH
 
     if not isinstance(bvh_file, BVH):
@@ -25,8 +25,9 @@ def show_bvh(bvh_file, scale=200, backend_cv=False):
     pos = get_positions_from_bvh(bvh_file)
 
     if backend_cv:
-        render_pose(bvh_file.p_index, pos, None, bvh_file.fps)
+        render_pose(bvh_file.p_index, pos, None, bvh_file.fps, scale=scale, **kwargs)
     else:
+        if scale is None: scale=200
         quick_visualize(bvh_file.p_index, pos, scale)
 
 
