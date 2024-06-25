@@ -750,17 +750,19 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         # A - center(A)
         # B - center(B)
 
-        H = torch.einsum("jim,jkm->ikm", A, B)
+        H = torch.einsum("jim,jkm->mik", A, B)
         R = torch.zeros_like(H)
-        for f in range(R.shape[-1]):
-            h = H[..., f]
-            u, s, v = torch.svd(h)
-            r = v.mm(u.T)
-            # if torch.det(r) < 0:
-            #     v[:, 2] *= -1.0
-            #     r = v.mm(u.T)
-            R[..., f] = r
-        # return R
+        U, S, V = torch.svd(H)
+        R = torch.einsum("mij,mkj->ikm", V, U)
+        # for f in range(R.shape[-1]):
+        #     h = H[..., f]
+        #     u, s, v = torch.svd(h)
+        #     r = v.mm(u.T)
+        #     # if torch.det(r) < 0:         #  <-- check det
+        #     #     v[:, 2] *= -1.0
+        #     #     r = v.mm(u.T)
+        #     R[..., f] = r
+        # # return R
         qua = matrix_to_quaternion(R.permute(2, 0, 1)).permute(1, 0)[None, ...]
         qua = rectify_w_of_quaternion(qua)
         return qua
