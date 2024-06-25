@@ -8,11 +8,12 @@ from .motion_process import get_feet_contacts, get_feet_grounding_shift
 
 
 import torch
-from typing import Tuple
+from typing import Optional
 
 
-def forward_kinematics(parent_index: list, mat3x3: torch.Tensor,
-                       root_pos: Tuple[torch.Tensor, None], offset: torch.Tensor,
+def forward_kinematics(parent_index: list, mat3x3: Optional[torch.Tensor],
+                       root_pos: Optional[torch.Tensor], offset: torch.Tensor,
+                       qua: Optional[torch.Tensor]=None,
                        world=True, is_edge=False):
     """
     implement forward kinematics in a batched manner
@@ -29,6 +30,10 @@ def forward_kinematics(parent_index: list, mat3x3: torch.Tensor,
     :return: tensor of positions in the shape of [(B), J, 3, F]
     """
     assert parent_index[0] == -1, f"the first parent index should be -1 (root), not {parent_index[0]}."
+
+    if mat3x3 is None:
+        assert qua is not None
+        mat3x3 = quaternion_to_matrix(qua)
 
     batch = len(mat3x3.shape) == 5
     if not batch:

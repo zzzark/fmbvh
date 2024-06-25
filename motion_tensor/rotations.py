@@ -646,6 +646,61 @@ def __get_chain(p_index, cur_index) -> list:
     return list(chain_list)
 
 
+def _copysign(a, b):
+    """
+    Return a tensor where each element has the absolute value taken from the,
+    corresponding element of a, with sign taken from the corresponding
+    element of b. This is like the standard copysign floating-point operation,
+    but is not careful about negative 0 and NaN.
+
+    Args:
+        a: source tensor.
+        b: tensor whose signs will be used, of the same shape as a.
+
+    Returns:
+        Tensor of the same shape as a with the signs of b.
+    """
+    signs_differ = (a < 0) != (b < 0)
+    return torch.where(signs_differ, -a, a)
+
+
+def _sqrt_positive_part(x):
+    """
+    Returns torch.sqrt(torch.max(0, x))
+    but with a zero subgradient where x is 0.
+    """
+    ret = torch.zeros_like(x)
+    positive_mask = x > 0
+    ret[positive_mask] = torch.sqrt(x[positive_mask])
+    return ret
+
+
+# https://github.com/facebookresearch/pytorch3d
+def matrix_to_quaternion(matrix):
+    """
+    Convert rotations given as rotation matrices to quaternions.
+
+    Args:
+        matrix: Rotation matrices as tensor of shape (..., 3, 3).
+
+    Returns:
+        quaternions with real part first, as tensor of shape (..., 4).
+    """
+    if matrix.size(-1) != 3 or matrix.size(-2) != 3:
+        raise ValueError(f"Invalid rotation matrix  shape f{matrix.shape}.")
+    m00 = matrix[..., 0, 0]
+    m11 = matrix[..., 1, 1]
+    m22 = matrix[..., 2, 2]
+    o0 = 0.5 * _sqrt_positive_part(1 + m00 + m11 + m22)
+    x = 0.5 * _sqrt_positive_part(1 + m00 - m11 - m22)
+    y = 0.5 * _sqrt_positive_part(1 - m00 + m11 - m22)
+    z = 0.5 * _sqrt_positive_part(1 - m00 - m11 + m22)
+    o1 = _copysign(x, matrix[..., 2, 1] - matrix[..., 1, 2])
+    o2 = _copysign(y, matrix[..., 0, 2] - matrix[..., 2, 0])
+    o3 = _copysign(z, matrix[..., 1, 0] - matrix[..., 0, 1])
+    return torch.stack((o0, o1, o2, o3), -1)
+
+
 def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iterative_EMA'):
     """
     a simplified version for multi-target IK, to get the rotation of the joint i to align its children joints 
@@ -674,8 +729,7 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         rot = quaternion_from_two_vectors(a, b)
         return rot
     
-    if multiple_children_solver == "default":
-        raise NotImplementedError
+    if multiple_children_solver == "default" or multiple_children_solver == "kabsch":
         off_ls = []
         tgt_ls = []
         for c in children:
@@ -684,26 +738,34 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
             off_ls.append(a)
             tgt_ls.append(b)
 
-        if len(children) == 2:  # pad rank to 3
-            xa = torch.cross(off_ls[0], off_ls[1], dim=-2)
-            xb = torch.cross(tgt_ls[0], tgt_ls[1], dim=-2)
+        # if len(children) == 2:  # pad rank to 3
+        for i in range(len(children)-1):
+            xa = torch.cross(off_ls[i], off_ls[i+1], dim=-2)
+            xb = torch.cross(tgt_ls[i], tgt_ls[i+1], dim=-2)
             off_ls.append(xa)
             tgt_ls.append(xb)
         
-        A = torch.concat(off_ls, dim=0)
-        B = torch.concat(tgt_ls, dim=0)
+        A = torch.concat(off_ls, dim=0)   # [N, 3, F]
+        B = torch.concat(tgt_ls, dim=0)   # [N, 3, F]
+        # A - center(A)
+        # B - center(B)
 
-        # TODO
-        M = A @ B.T
-        U, S, V = torch.svd(M)
-        R = U @ V
-        if R.det() < 0:  # det == -1
-            U[:, 2].neg_()
-            R = U @ V
-        return R
-
+        H = torch.einsum("jim,jkm->ikm", A, B)
+        R = torch.zeros_like(H)
+        for f in range(R.shape[-1]):
+            h = H[..., f]
+            u, s, v = torch.svd(h)
+            r = v.mm(u.T)
+            # if torch.det(r) < 0:
+            #     v[:, 2] *= -1.0
+            #     r = v.mm(u.T)
+            R[..., f] = r
+        # return R
+        qua = matrix_to_quaternion(R.permute(2, 0, 1)).permute(1, 0)[None, ...]
+        qua = rectify_w_of_quaternion(qua)
+        return qua
     # solve multiple children
-    if multiple_children_solver == "slerp":
+    elif multiple_children_solver == "slerp":
         r_ls = []
         for c in children:
             a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
