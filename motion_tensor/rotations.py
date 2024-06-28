@@ -529,7 +529,7 @@ def rotate_vector_with_quaternion(vec: torch.Tensor, qua: torch.Tensor) -> torch
     pad = pad_position_to_quaternion
     inv = inverse_quaternion
 
-    assert vec.shape[-2] == 3 and qua.shape[-2] == 4 and vec.shape[-1] == qua.shape[-1]
+    assert vec.shape[-2] == 3 and qua.shape[-2] == 4  # and vec.shape[-1] == qua.shape[-1]
     return mul(qua, mul(pad(vec), inv(qua)))[..., 1:, :]
 
 
@@ -719,12 +719,12 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
     children = [e for e in range(len(p_index)) if p_index[e] == i]
 
     if len(children) == 0:
-        corr = torch.zeros(1, 4, target.shape[-1], dtype=target.dtype)
+        corr = torch.zeros(1, 4, target.shape[-1], dtype=target.dtype, device=target.device)
         corr[:, 0, :] = 1.0
         return corr
 
     if len(children) == 1:
-        a = offset[[children[0]], :, :].broadcast_to(1, 3, target.shape[-1])
+        a = offset[[children[0]], :, :]
         b = target[[children[0]], :, :]
         rot = quaternion_from_two_vectors(a, b)
         return rot
@@ -733,7 +733,7 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         off_ls = []
         tgt_ls = []
         for c in children:
-            a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+            a = offset[[c], :, :]
             b = target[[c], :, :]
             off_ls.append(a)
             tgt_ls.append(b)
@@ -764,13 +764,12 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         #     R[..., f] = r
         # # return R
         qua = matrix_to_quaternion(R.permute(2, 0, 1)).permute(1, 0)[None, ...]
-        qua = rectify_w_of_quaternion(qua)
         return qua
     # solve multiple children
     elif multiple_children_solver == "slerp":
         r_ls = []
         for c in children:
-            a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+            a = offset[[c], :, :]
             b = target[[c], :, :]
             rot = quaternion_from_two_vectors(a, b)
             r_ls.append(rot)
@@ -781,7 +780,7 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         tgt_ls = []
         EMA = "EMA" in multiple_children_solver
         for c in children:
-            a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+            a = offset[[c], :, :]
             b = target[[c], :, :]
             a, b = normalize_vector(a), normalize_vector(b)
             off_ls.append(a)
@@ -823,7 +822,7 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
         off_ls = []
         tgt_ls = []
         for c in children:
-            a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+            a = offset[[c], :, :]
             b = target[[c], :, :]
             a, b = normalize_vector(a), normalize_vector(b)
             off_ls.append(a)
@@ -880,7 +879,7 @@ def __get_rotation_at(offset, target, p_index, i, multiple_children_solver='iter
             off_ls = []
             tgt_ls = []
             for c in children:
-                a = offset[[c], :, :].broadcast_to(1, 3, target.shape[-1])
+                a = offset[[c], :, :]
                 b = target[[c], :, :]
                 a, b = normalize_vector(a), normalize_vector(b)
                 off_ls.append(a)
