@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def visualize_arrays(arrays, cmap="viridis", interpolation="catrom"):
+def visualize_arrays(arrays, cmap="viridis", interpolation="catrom", savefig=None):
     """
     :param arrays: [..., W, H] or list of [W, H]
     """
@@ -50,7 +50,10 @@ def visualize_arrays(arrays, cmap="viridis", interpolation="catrom"):
             axs[i].axis('off')
 
     plt.tight_layout()
-    plt.show()
+    if savefig is None:
+        plt.show()
+    else:
+        plt.savefig(savefig)
 
 
 if __name__ == "__main__":
