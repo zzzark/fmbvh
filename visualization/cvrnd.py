@@ -318,7 +318,14 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
     if bar is not None:
         bar.close()
     
-    if output:
-        create_video_from_images(images, output, fps, format=format)
+    if not isinstance(output, str):
+        return images
 
+    ext = output[-3:].lower()
+    if ext == "avi" or ext == "mp4":
+        create_video_from_images(images, output, fps, format=format)
+    elif ext == "jpg" or ext == "png":
+        for i, im in enumerate(images):
+            name = output[:-4]+f'_{i}.'+ext if i != 0 else output[:-4]+'.'+ext
+            cv.imwrite(name, im)
     return images
