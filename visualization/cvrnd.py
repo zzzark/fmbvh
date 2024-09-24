@@ -277,7 +277,7 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
             tgt = cam_damping * tgt + (1-cam_damping) * target[:, t]
             rnd.camera_follow(tgt, cam_r, cam_t/180*3.14, cam_y)
 
-            rnd.draw_grid(count=19, unit=0.2)
+            rnd.draw_grid(count=39, unit=0.2)
             rnd.draw_origin()
 
             rnd.render(lines)
