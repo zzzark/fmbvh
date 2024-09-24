@@ -42,8 +42,23 @@ class BVHInfo:
         self.frame_time = 0.0
         if bvh_filepath:
             self.from_file(bvh_filepath)
-    
-    def from_file(self, bvh_filepath):
+
+    def from_file(self, bvh_filepath: str) -> None:
+        self.filepath = bvh_filepath
+        if bvh_filepath.endswith(".bvh"):
+            self._from_bvh(bvh_filepath)
+        elif bvh_filepath.endswith(".bpk"):
+            self._from_bpk(bvh_filepath)
+        else:
+            raise NotImplementedError(f"Expecting a bvh file or bpk file, but got {bvh_filepath}")
+
+    def _from_bpk(self, bvh_filepath) -> None:
+        with gzip.open(bvh_filepath, "rb", compresslevel=1) as f:
+            bpk = pickle.load(f)
+        self.frames = bpk['f']
+        self.frame_time = bpk['t']
+
+    def _from_bvh(self, bvh_filepath):
         info_counter = 0
         info_max = 2
         with open(bvh_filepath) as f:
