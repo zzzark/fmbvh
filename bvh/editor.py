@@ -2,8 +2,10 @@ from .parser import BVH, JointOffset, JointMotion
 from collections import OrderedDict  # NOTE: since python >= 3.6, OrderedDict == dict
 import itertools
 from copy import deepcopy
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import torch
+
+# TODO: optimize code structure
 from ..motion_tensor import rotations as mor
 from ..motion_tensor import bvh_casting as bvc
 
@@ -459,6 +461,110 @@ def rename_joints(obj: BVH, src_names: list, dst_names: list):
             __find_and_replace(name)
 
     return reorder_bvh(obj)
+
+
+def copy_rotations_by_name(src_bvh: BVH, dst_bvh: BVH, dst2src_mapping: dict) -> BVH:
+    ret_bvh = deepcopy(dst_bvh)
+    ret_bvh.motion_data = OrderedDict()
+
+    ret_bvh.frames = src_bvh.frames
+    ret_bvh.frame_time = src_bvh.frame_time
+    ret_bvh.filepath = ""
+
+    dst_names = dst_bvh.names
+
+    for dst_name in dst_names:
+        if dst_name in dst2src_mapping:
+            jm: JointMotion = src_bvh.motion_data[dst2src_mapping[dst_name]]
+        else:
+            jm: JointMotion = JointMotion(dst_name, [[0.0, 0.0, 0.0] for _ in range(ret_bvh.frames)])
+
+        ret_bvh.motion_data[dst_name] = deepcopy(jm)
+
+    root = ret_bvh.root_name
+    ret_bvh.motion_data[root].data = [[0, 0, 0, e[3], e[4], e[5]] for e in ret_bvh.motion_data[root].data]
+    return ret_bvh
+
+
+def retarget(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str], 
+             dst_to_src: Dict[str, str]) -> BVH:
+    from ..motion_tensor.bvh_casting import get_positions_from_bvh, get_t_pose_from_bvh, write_quaternion_to_bvh, get_offsets_from_bvh
+    from ..motion_tensor.rotations import get_quat_from_pos, quaternion_to_matrix
+    from ..motion_tensor.motion_process import get_feet_contacts, get_feet_grounding_shift
+    from ..motion_tensor.kinematics import forward_kinematics
+
+    src_t = get_t_pose_from_bvh(src_bvh)
+    dst_t = get_t_pose_from_bvh(dst_bvh)
+
+    src_x = (src_t[:, 0, :].max() - src_t[:, 0, :].min()).item()
+    dst_x = (dst_t[:, 0, :].max() - dst_t[:, 0, :].min()).item()
+    src_y = (src_t[:, 1, :].max() - src_t[:, 1, :].min()).item()
+    dst_y = (dst_t[:, 1, :].max() - dst_t[:, 1, :].min()).item()
+    src_z = (src_t[:, 2, :].max() - src_t[:, 2, :].min()).item()
+    dst_z = (dst_t[:, 2, :].max() - dst_t[:, 2, :].min()).item()
+
+    src_h = max(src_x, src_y, src_z)
+    dst_h = max(dst_x, dst_y, dst_z)
+
+    src_pos, src_off, src_trs, src_qua = get_positions_from_bvh(src_bvh, return_rest=True)
+    # dst_pos, dst_off, dst_trs, dst_qua = get_positions_from_bvh(dst_bvh, return_rest=True)
+    dst_off = get_offsets_from_bvh(dst_bvh)
+
+    frames = src_pos.shape[-1]
+    src_pdx = src_bvh.p_index
+    dst_pdx = dst_bvh.p_index
+    src_names = src_bvh.names
+    dst_names = dst_bvh.names
+
+    src_names_mapping = []
+    for d_name in dst_names:
+        s_name = dst_to_src.get(d_name, None)
+        if s_name is None:
+            raise KeyError(f"Name {d_name} not in dst_to_src mapping.")
+        src_names_mapping.append(s_name)
+
+    src_map = [src_names.index(e) for e in src_names_mapping]
+    # src_map = [src_names.index(e) for e in dst2src_mapping.values()]
+    # dst_map = [dst_names.index(e) for e in dst2src_mapping.keys()]
+
+    dst_pos = torch.clone(src_pos[src_map])
+    dst_pos = dst_pos * (dst_h / src_h)
+
+    # # >>> DEBUG
+    # def offset_to_position(pdx, offset):
+    #     offset = torch.clone(offset)
+    #     for i, p in enumerate(pdx):
+    #         if p == -1:
+    #             continue
+    #         offset[i, ...] += offset[p, ...]
+    #     return offset
+    
+    # from fmbvh.visualization.cvrnd import render_pose
+    # DEBUG_N = len(dst_pdx)
+    # render_pose(dst_pdx[:DEBUG_N],                              dst_pos[:DEBUG_N], None, scale=1.0)
+    # render_pose(dst_pdx[:DEBUG_N], offset_to_position(dst_pdx, dst_off)[:DEBUG_N], None, scale=1.0)
+    # # <<< DEBUG
+
+    dst_trs, dst_qua = get_quat_from_pos(dst_pdx, dst_pos, dst_off, "kabsch")
+
+    # # >>> DEBUG
+    # dst_fk_pos = forward_kinematics(dst_pdx, quaternion_to_matrix(dst_qua), dst_trs, dst_off)
+    # from fmbvh.visualization.cvrnd import render_pose
+    # render_pose(dst_pdx, dst_fk_pos, None, scale=1.0)
+    # # DEBUG <<<
+
+    # fix foot
+    src_feet_id = [src_names.index(dst_to_src[e]) for e in dst_feet]
+    dst_feet_id = [dst_names.index(e)             for e in dst_feet]
+    K = int(1+2*((src_bvh.fps+0.5)//15))
+    fc = get_feet_contacts(src_pos, src_feet_id, src_h, kernel_size=0)
+    dst_pos = forward_kinematics(dst_pdx, quaternion_to_matrix(dst_qua), dst_trs, dst_off)
+    sft = get_feet_grounding_shift(dst_pos[dst_feet_id], fc, up_axis=1, kernel=K+4, iter_=5, gather="min")
+    dst_trs[0, 1] -= sft
+
+    ret_bvh = deepcopy(dst_bvh)
+    ret_bvh.filepath = ""
+    return write_quaternion_to_bvh(dst_trs, dst_qua, ret_bvh, frame_time=src_bvh.frame_time)
 
 
 # def demo_test():
