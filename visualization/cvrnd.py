@@ -266,7 +266,7 @@ def render_pose(pindex, pos, output, fps=60, scale=None,
         t = 0
         while t < T:
             if bar is not None:
-                bar.update(t)
+                bar.update(1)
             lines = []
             for j in range(J):
                 p = pindex[j]
