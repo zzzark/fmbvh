@@ -7,10 +7,14 @@ from . import rotations
 from .rotations import slerp
 
 
-def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sampler='nearest', align_corners=False):
+def sample_frames(motion: torch.Tensor, src_frametime=None, dst_frametime=None, src_fps=None, dst_fps=None, scale_factor=None, target_frame=None, sampler='nearest', align_corners=False):
     """
     upsample a given rotation to a certain frame_time or scale_factor
     :param motion: JxCxF   (J: num_joints; C: channel, 3(euler, position) or 4(quaternion); F: num_frames)
+    :param src_frametime: 
+    :param dst_frametime: 
+    :param src_fps: 
+    :param dst_fps: 
     :param scale_factor: source_frame_time / target_frame_time
     :param target_frame: how many frames are needed
                          NOTE: if scale_factor is not none, another interpolate will be applied
@@ -20,6 +24,19 @@ def sample_frames(motion: torch.Tensor, scale_factor=None, target_frame=None, sa
     """
     # TODO: use slerp to interpolate quaternions
     assert len(motion.shape) == 3, 'sample_frames: input should be [J, C, F]'
+
+    assert not (src_frametime is None) ^ (dst_frametime is None)
+    assert not (src_fps is None) ^ (dst_fps is None)
+
+    if src_frametime is not None and dst_frametime is not None:
+        assert src_fps is None and dst_fps is None
+        assert scale_factor is None and target_frame is None
+        scale_factor = src_frametime / dst_frametime
+    
+    if src_fps is not None and dst_fps is not None:
+        assert src_frametime is None and dst_frametime is None
+        assert scale_factor is None and target_frame is None
+        scale_factor = dst_fps / src_fps
 
     if scale_factor is not None and abs(scale_factor - 1.0) > 1e-3:
         motion = F.interpolate(motion, size=None, recompute_scale_factor=False, scale_factor=scale_factor, mode=sampler, align_corners=align_corners)
@@ -288,7 +305,7 @@ def get_feet_grounding_shift(fp, fc, up_axis=1, iter_=2, kernel=7, gather="mean"
     assert K >= 3
     K2 = (K-1)//2
     ikp = torch.zeros_like(fc, dtype=fp.dtype)  # ik position, [E, T]
-    mask = (fc != 0)
+    mask = (fc > 0.5)
     ikp[mask] = fp[:, Y, :][mask]
     org_ikp = ikp.clone()
 
@@ -310,6 +327,10 @@ def get_feet_grounding_shift(fp, fc, up_axis=1, iter_=2, kernel=7, gather="mean"
         ikp = ikp.mean(dim=0)  # [E, T] -> [T]
     elif gather == "min":
         ikp = ikp.min(dim=0)[0]  # [E, T] -> [T]
+    elif gather == "max":
+        ikp = ikp.max(dim=0)[0]  # [E, T] -> [T]
+    elif gather == "none":
+        return ikp  # [E, T]
     else:
         raise NotImplementedError
     return ikp

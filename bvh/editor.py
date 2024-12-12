@@ -487,14 +487,33 @@ def copy_rotations_by_name(src_bvh: BVH, dst_bvh: BVH, dst2src_mapping: dict) ->
 
 
 def retarget(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str], 
-             dst_to_src: Dict[str, str]) -> BVH:
+             dst_to_src: Dict[str, str],
+             src_t=None, dst_t=None) -> BVH:
+    """retarget a motion from src_bvh to dst_bvh, given a full joint mapping from dst to src
+
+    Args:
+        src_bvh (BVH): source bvh
+        dst_bvh (BVH): destination bvh
+        dst_feet (List[str]): feet's name for foot ik (place on ground)
+        dst_to_src (Dict[str, str]): joint name mapping
+        src_t (torch.Tensor, optional): some motion may not in T-pose (e.g. A-posed), pass a [J, 3, T] tensor if necessary. Defaults to None.
+        dst_t (torch.Tensor, optional): some motion may not in T-pose (e.g. A-posed), pass a [J, 3, T] tensor if necessary. Defaults to None.
+
+    Raises:
+        KeyError: joint name mapping mismatch
+
+    Returns:
+        BVH: retargeted bvh motion file
+    """
     from ..motion_tensor.bvh_casting import get_positions_from_bvh, get_t_pose_from_bvh, write_quaternion_to_bvh, get_offsets_from_bvh
     from ..motion_tensor.rotations import get_quat_from_pos, quaternion_to_matrix
     from ..motion_tensor.motion_process import get_feet_contacts, get_feet_grounding_shift
     from ..motion_tensor.kinematics import forward_kinematics
 
-    src_t = get_t_pose_from_bvh(src_bvh)
-    dst_t = get_t_pose_from_bvh(dst_bvh)
+    if src_t is None:
+        src_t = get_t_pose_from_bvh(src_bvh)
+    if dst_t is None:
+        dst_t = get_t_pose_from_bvh(dst_bvh)
 
     src_x = (src_t[:, 0, :].max() - src_t[:, 0, :].min()).item()
     dst_x = (dst_t[:, 0, :].max() - dst_t[:, 0, :].min()).item()
@@ -565,6 +584,47 @@ def retarget(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str],
     ret_bvh = deepcopy(dst_bvh)
     ret_bvh.filepath = ""
     return write_quaternion_to_bvh(dst_trs, dst_qua, ret_bvh, frame_time=src_bvh.frame_time)
+
+
+def uneven_ground_to_plane(dst_bvh: BVH, dst_feet: List[str], vel_thres=0.005, pos_thres=0.03):
+    from ..motion_tensor.motion_process import get_feet_contacts, get_feet_grounding_shift
+    from ..motion_tensor.bvh_casting import get_positions_from_bvh, get_t_pose_from_bvh, write_quaternion_to_bvh, get_offsets_from_bvh
+    from ..motion_tensor.rotations import get_quat_from_pos, quaternion_to_matrix
+    from ..motion_tensor.motion_process import get_feet_contacts, get_feet_grounding_shift
+    from ..motion_tensor.kinematics import forward_kinematics
+
+    dst_names = dst_bvh.names
+    dst_pdx = dst_bvh.p_index
+    dst_feet_id = [dst_names.index(e)             for e in dst_feet]
+
+    dst_pos, dst_off, dst_trs, dst_qua = get_positions_from_bvh(dst_bvh, return_rest=True)
+    dst_t = get_t_pose_from_bvh(dst_bvh)
+
+    dst_x = (dst_t[:, 0, :].max() - dst_t[:, 0, :].min()).item()
+    dst_y = (dst_t[:, 1, :].max() - dst_t[:, 1, :].min()).item()
+    dst_z = (dst_t[:, 2, :].max() - dst_t[:, 2, :].min()).item()
+
+    dst_h = max(dst_x, dst_y, dst_z)
+
+    K = int(1+2*((dst_bvh.fps+0.5)//15))
+    fc_p = get_feet_contacts(dst_pos, dst_feet_id, dst_h, kernel_size=K+2, criteria='pos', pos_thres=pos_thres)
+    fc_v = get_feet_contacts(dst_pos, dst_feet_id, dst_h, kernel_size=K+2, criteria='vel', vel_thres=vel_thres)
+
+    fc = torch.max(fc_p, fc_v)  # [..., E, T]
+
+    ft_sft = get_feet_grounding_shift(dst_pos[dst_feet_id], fc, up_axis=1, kernel=K+8, iter_=5, gather="none")
+
+    # root_sft = ft_sft.max(dim=0)[0]
+    root_sft = ft_sft.mean(dim=0)
+
+    ft_sft += root_sft[None, ...]
+
+    dst_trs[:, 1, :] -= root_sft
+    dst_pos[dst_feet_id, 1, :] -= ft_sft
+
+    dst_trs, dst_qua = get_quat_from_pos(dst_pdx, dst_pos, dst_off, "kabsch")
+
+    return write_quaternion_to_bvh(dst_trs, dst_qua, dst_bvh)
 
 
 # def demo_test():
