@@ -4,7 +4,7 @@
 import torch
 import torch.nn.functional as F
 from . import rotations
-from .rotations import slerp
+from .rotations import matrix_to_rotation_6d, quaternion_to_matrix, rotation_6d_to_matrix, matrix_to_quaternion
 
 
 def sample_frames(motion: torch.Tensor, src_frametime=None, dst_frametime=None, src_fps=None, dst_fps=None, scale_factor=None, target_frame=None, sampler='nearest', align_corners=False):
@@ -22,7 +22,6 @@ def sample_frames(motion: torch.Tensor, src_frametime=None, dst_frametime=None, 
     :param sampler: 'nearest', 'linear', etc.
     :return:
     """
-    # TODO: use slerp to interpolate quaternions
     assert len(motion.shape) == 3, 'sample_frames: input should be [J, C, F]'
 
     assert not (src_frametime is None) ^ (dst_frametime is None)
@@ -47,41 +46,12 @@ def sample_frames(motion: torch.Tensor, src_frametime=None, dst_frametime=None, 
     return motion
 
 
-def sample_quat(quat: torch.Tensor, scale_factor=None, target_frame=None, sampler='linear', dim=-1):
-    assert False  # check
-
-    """
-    sample with quat
-    :param motion: JxCxF   (J: num_joints; C: channel, 3(euler, position) or 4(quaternion); F: num_frames)
-    :param scale_factor: source_frame_time / target_frame_time
-    :param target_frame: how many frames are needed
-                         NOTE: if scale_factor is not none, another interpolate will be applied
-                               to obtain `target_frame` frames
-    :param sampler: 'nearest', 'linear', etc.
-    :return:
-    """
-    if dim < 0:
-        dim = len(quat.shape) + dim
-        assert dim >= 0
-    
-    def __t(i):
-        # make slice [..., i, ...]
-        return [slice(None) if j != dim else i for j in range(len(quat.shape))]
-
-    srcT = quat.shape[dim]
-    dstT = int(srcT * scale_factor) if scale_factor is not None else (target_frame if target_frame is not None else -1)
-    assert dstT > 0
-    idx = torch.arange(0, dstT, 1, device=quat.device, dtype=quat.dtype)
-    idx = F.interpolate(idx, size=dstT, recompute_scale_factor=False, scale_factor=None, mode=sampler)
-    output = torch.empty((*quat.shape[:dim], dstT, *quat.shape[dim+1:]), device=quat.device, dtype=quat.dtype)
-
-    # TODO: loop unrolling
-    for t in range(dstT):
-        a = int(t)
-        b = a + 1
-        w = t - a
-        output[__t(t)] = slerp(quat[__t(a)], quat[__t(b)], w)
-    return output
+def sample_quat_by_r6d(qua: torch.Tensor, src_frametime=None, dst_frametime=None, src_fps=None, dst_fps=None, scale_factor=None, target_frame=None, sampler='nearest', align_corners=False):
+    r6d = matrix_to_rotation_6d(quaternion_to_matrix(qua))
+    r6d = sample_frames(r6d, src_frametime, dst_frametime, src_fps, dst_fps, scale_factor, target_frame, sampler, align_corners)
+    mat = rotation_6d_to_matrix(r6d).permute(3, 0, 1, 2)
+    qua = matrix_to_quaternion(mat).permute(1, 2, 0)
+    return qua
 
 
 def align_root_rot(pos: torch.Tensor, root_rot, hip: tuple, sho: tuple, to_axis='Z', up_axis='Y', 
