@@ -488,7 +488,10 @@ def copy_rotations_by_name(src_bvh: BVH, dst_bvh: BVH, dst2src_mapping: dict) ->
 
 def retarget(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str], 
              dst_to_src: Dict[str, str],
-             src_t=None, dst_t=None) -> BVH:
+             src_t=None, dst_t=None, 
+             dst_head: str=None,
+             get_dst_off_from_t=False,
+             foot_ik=True) -> BVH:
     """retarget a motion from src_bvh to dst_bvh, given a full joint mapping from dst to src
 
     Args:
@@ -505,35 +508,65 @@ def retarget(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str],
     Returns:
         BVH: retargeted bvh motion file
     """
-    from ..motion_tensor.bvh_casting import get_positions_from_bvh, get_t_pose_from_bvh, write_quaternion_to_bvh, get_offsets_from_bvh
+    from ..motion_tensor.bvh_casting import get_positions_from_bvh, get_t_pose_from_bvh, write_quaternion_to_bvh, get_offsets_from_bvh, write_offsets_to_bvh
     from ..motion_tensor.rotations import get_quat_from_pos, quaternion_to_matrix
     from ..motion_tensor.motion_process import get_feet_contacts, get_feet_grounding_shift
     from ..motion_tensor.kinematics import forward_kinematics
+
+    if not isinstance(src_bvh, BVH):
+        src_bvh = BVH(src_bvh)
+
+    if not isinstance(dst_bvh, BVH):
+        dst_bvh = BVH(dst_bvh)
 
     if src_t is None:
         src_t = get_t_pose_from_bvh(src_bvh)
     if dst_t is None:
         dst_t = get_t_pose_from_bvh(dst_bvh)
 
-    src_x = (src_t[:, 0, :].max() - src_t[:, 0, :].min()).item()
-    dst_x = (dst_t[:, 0, :].max() - dst_t[:, 0, :].min()).item()
-    src_y = (src_t[:, 1, :].max() - src_t[:, 1, :].min()).item()
-    dst_y = (dst_t[:, 1, :].max() - dst_t[:, 1, :].min()).item()
-    src_z = (src_t[:, 2, :].max() - src_t[:, 2, :].min()).item()
-    dst_z = (dst_t[:, 2, :].max() - dst_t[:, 2, :].min()).item()
+    # frames = src_pos.shape[-1]
+    src_pdx = src_bvh.p_index
+    dst_pdx = dst_bvh.p_index
+    src_names = src_bvh.names
+    dst_names = dst_bvh.names
+
+    src_head = dst_to_src[dst_head]
+    src_head_id = src_names.index(src_head)
+    dst_head_id = dst_names.index(dst_head)
+    src_feet_id = [src_names.index(dst_to_src[e]) for e in dst_feet]
+    dst_feet_id = [dst_names.index(e)             for e in dst_feet]
+
+    if dst_head is None:
+        dst_x = (dst_t[:, 0, :].max() - dst_t[:, 0, :].min()).item()
+        dst_y = (dst_t[:, 1, :].max() - dst_t[:, 1, :].min()).item()
+        dst_z = (dst_t[:, 2, :].max() - dst_t[:, 2, :].min()).item()
+    else:
+        dst_x = max(abs(dst_t[dst_head_id, 0, :] - dst_t[feet_id, 0, :]) for feet_id in dst_feet_id)
+        dst_y = max(abs(dst_t[dst_head_id, 1, :] - dst_t[feet_id, 1, :]) for feet_id in dst_feet_id)
+        dst_z = max(abs(dst_t[dst_head_id, 2, :] - dst_t[feet_id, 2, :]) for feet_id in dst_feet_id)
+
+    if src_head is None:
+        src_x = (src_t[:, 0, :].max() - src_t[:, 0, :].min()).item()
+        src_y = (src_t[:, 1, :].max() - src_t[:, 1, :].min()).item()
+        src_z = (src_t[:, 2, :].max() - src_t[:, 2, :].min()).item()
+    else:
+        src_x = max(abs(src_t[src_head_id, 0, :] - src_t[feet_id, 0, :]) for feet_id in src_feet_id)
+        src_y = max(abs(src_t[src_head_id, 1, :] - src_t[feet_id, 1, :]) for feet_id in src_feet_id)
+        src_z = max(abs(src_t[src_head_id, 2, :] - src_t[feet_id, 2, :]) for feet_id in src_feet_id)
 
     src_h = max(src_x, src_y, src_z)
     dst_h = max(dst_x, dst_y, dst_z)
 
     src_pos, src_off, src_trs, src_qua = get_positions_from_bvh(src_bvh, return_rest=True)
     # dst_pos, dst_off, dst_trs, dst_qua = get_positions_from_bvh(dst_bvh, return_rest=True)
-    dst_off = get_offsets_from_bvh(dst_bvh)
 
-    frames = src_pos.shape[-1]
-    src_pdx = src_bvh.p_index
-    dst_pdx = dst_bvh.p_index
-    src_names = src_bvh.names
-    dst_names = dst_bvh.names
+    if get_dst_off_from_t is True:
+        dst_off = torch.clone(dst_t)
+        for p, c in zip(dst_pdx[::-1], list(range(len(dst_pdx)))[::-1]):
+            if p >= 0:
+                dst_off[c] -= dst_off[p].clone()
+    else:
+        dst_off = get_offsets_from_bvh(dst_bvh)
 
     src_names_mapping = []
     for d_name in dst_names:
@@ -564,24 +597,151 @@ def retarget(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str],
     # render_pose(dst_pdx[:DEBUG_N], offset_to_position(dst_pdx, dst_off)[:DEBUG_N], None, scale=1.0)
     # # <<< DEBUG
 
+    dst_qua = torch.clone(src_qua[src_map])
+    dst_trs = src_trs * (dst_h / src_h)
+
     dst_trs, dst_qua = get_quat_from_pos(dst_pdx, dst_pos, dst_off, "kabsch")
 
     # # >>> DEBUG
+    # # dst_off = src_off[src_map].clone()
     # dst_fk_pos = forward_kinematics(dst_pdx, quaternion_to_matrix(dst_qua), dst_trs, dst_off)
     # from fmbvh.visualization.cvrnd import render_pose
     # render_pose(dst_pdx, dst_fk_pos, None, scale=1.0)
+    # exit()
     # # DEBUG <<<
 
     # fix foot
-    src_feet_id = [src_names.index(dst_to_src[e]) for e in dst_feet]
-    dst_feet_id = [dst_names.index(e)             for e in dst_feet]
-    K = int(1+2*((src_bvh.fps+0.5)//15))
-    fc = get_feet_contacts(src_pos, src_feet_id, src_h, kernel_size=0)
-    dst_pos = forward_kinematics(dst_pdx, quaternion_to_matrix(dst_qua), dst_trs, dst_off)
-    sft = get_feet_grounding_shift(dst_pos[dst_feet_id], fc, up_axis=1, kernel=K+4, iter_=5, gather="min")
-    dst_trs[0, 1] -= sft
+    if foot_ik:
+        K = int(1+2*((src_bvh.fps+0.5)//15))
+        fc = get_feet_contacts(src_pos, src_feet_id, src_h, kernel_size=0)
+        dst_pos = forward_kinematics(dst_pdx, quaternion_to_matrix(dst_qua), dst_trs, dst_off)
+        sft = get_feet_grounding_shift(dst_pos[dst_feet_id], fc, up_axis=1, kernel=K+4, iter_=5, gather="min")
+        dst_trs[0, 1] -= sft
 
     ret_bvh = deepcopy(dst_bvh)
+    if get_dst_off_from_t:
+        ret_bvh = write_offsets_to_bvh(dst_off, ret_bvh)
+    ret_bvh.filepath = ""
+    return write_quaternion_to_bvh(dst_trs, dst_qua, ret_bvh, frame_time=src_bvh.frame_time)
+
+
+def retarget_cr(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str], 
+                dst_to_src: Dict[str, str],
+                src_t=None, dst_t=None, 
+                dst_head: str=None,
+                get_dst_off_from_t=True) -> BVH:
+    """retarget a motion from src_bvh to dst_bvh by copy rotations, given a full joint mapping from dst to src
+
+    Args:
+        src_bvh (BVH): source bvh
+        dst_bvh (BVH): destination bvh
+        dst_feet (List[str]): feet's name for foot ik (place on ground)
+        dst_to_src (Dict[str, str]): joint name mapping
+        src_t (torch.Tensor, optional): some motion may not in T-pose (e.g. A-posed), pass a [J, 3, T] tensor if necessary. Defaults to None.
+        dst_t (torch.Tensor, optional): some motion may not in T-pose (e.g. A-posed), pass a [J, 3, T] tensor if necessary. Defaults to None.
+
+    Raises:
+        KeyError: joint name mapping mismatch
+
+    Returns:
+        BVH: retargeted bvh motion file
+    """
+    from ..motion_tensor.bvh_casting import get_quaternion_from_bvh, write_quaternion_to_bvh, get_t_pose_from_bvh, get_offsets_from_bvh, write_offsets_to_bvh
+    from ..motion_tensor.rotations import get_quat_from_pos, quaternion_to_matrix, quaternion_from_two_vectors, mul_two_quaternions, inverse_quaternion
+    from ..motion_tensor.motion_process import get_feet_contacts, get_feet_grounding_shift
+    from ..motion_tensor.kinematics import forward_kinematics
+
+    if not isinstance(src_bvh, BVH):
+        src_bvh = BVH(src_bvh)
+
+    if not isinstance(dst_bvh, BVH):
+        dst_bvh = BVH(dst_bvh)
+
+    if src_t is None:
+        src_t = get_t_pose_from_bvh(src_bvh)
+    if dst_t is None:
+        dst_t = get_t_pose_from_bvh(dst_bvh)
+
+    # frames = src_pos.shape[-1]
+    src_pdx = src_bvh.p_index
+    dst_pdx = dst_bvh.p_index
+    src_names = src_bvh.names
+    dst_names = dst_bvh.names
+
+    src_head = dst_to_src[dst_head]
+    src_head_id = src_names.index(src_head)
+    dst_head_id = dst_names.index(dst_head)
+    src_feet_id = [src_names.index(dst_to_src[e]) for e in dst_feet]
+    dst_feet_id = [dst_names.index(e)             for e in dst_feet]
+
+    if dst_head is None:
+        dst_x = (dst_t[:, 0, :].max() - dst_t[:, 0, :].min()).item()
+        dst_y = (dst_t[:, 1, :].max() - dst_t[:, 1, :].min()).item()
+        dst_z = (dst_t[:, 2, :].max() - dst_t[:, 2, :].min()).item()
+    else:
+        dst_x = max(abs(dst_t[dst_head_id, 0, :] - dst_t[feet_id, 0, :]) for feet_id in dst_feet_id)
+        dst_y = max(abs(dst_t[dst_head_id, 1, :] - dst_t[feet_id, 1, :]) for feet_id in dst_feet_id)
+        dst_z = max(abs(dst_t[dst_head_id, 2, :] - dst_t[feet_id, 2, :]) for feet_id in dst_feet_id)
+
+    if src_head is None:
+        src_x = (src_t[:, 0, :].max() - src_t[:, 0, :].min()).item()
+        src_y = (src_t[:, 1, :].max() - src_t[:, 1, :].min()).item()
+        src_z = (src_t[:, 2, :].max() - src_t[:, 2, :].min()).item()
+    else:
+        src_x = max(abs(src_t[src_head_id, 0, :] - src_t[feet_id, 0, :]) for feet_id in src_feet_id)
+        src_y = max(abs(src_t[src_head_id, 1, :] - src_t[feet_id, 1, :]) for feet_id in src_feet_id)
+        src_z = max(abs(src_t[src_head_id, 2, :] - src_t[feet_id, 2, :]) for feet_id in src_feet_id)
+
+    src_h = max(src_x, src_y, src_z)
+    dst_h = max(dst_x, dst_y, dst_z)
+
+    src_trs, src_qua = get_quaternion_from_bvh(src_bvh)
+
+    src_names_mapping = []
+    for d_name in dst_names:
+        s_name = dst_to_src.get(d_name, None)
+        if s_name is None:
+            raise KeyError(f"Name {d_name} not in dst_to_src mapping.")
+        src_names_mapping.append(s_name)
+    src_map = [src_names.index(e) for e in src_names_mapping]
+
+    if get_dst_off_from_t is True:
+        dst_off = torch.clone(dst_t)
+        for p, c in zip(dst_pdx[::-1], list(range(len(dst_pdx)))[::-1]):
+            if p >= 0:
+                dst_off[c] -= dst_off[p].clone()
+    else:
+        dst_off = get_offsets_from_bvh(dst_bvh)
+
+    dst_qua = torch.clone(src_qua[src_map])
+    dst_trs = src_trs * (dst_h / src_h)
+
+    tgt_t = torch.clone(src_t[src_map])
+    _, delta_qua = get_quat_from_pos(dst_pdx, tgt_t, dst_off, "kabsch")
+
+    c_global = delta_qua.clone()
+    for c, p in enumerate(dst_pdx):
+        if p >= 0:
+            c_global[c] = mul_two_quaternions(c_global[p], c_global[c])
+
+    p_global = delta_qua.clone()
+    for c, p in enumerate(dst_pdx):
+        if p >= 0:
+            p_global[c] = c_global[p]
+        else:
+            p_global[c, :, :] = 0
+            p_global[c, 0, :] = 1
+
+    dst_qua = mul_two_quaternions(inverse_quaternion(p_global), mul_two_quaternions(dst_qua, c_global))
+
+    # dst_fk_pos = forward_kinematics(dst_pdx, quaternion_to_matrix(dst_qua), dst_trs, dst_off)
+    # from fmbvh.visualization.cvrnd import render_pose
+    # render_pose(dst_pdx, dst_fk_pos, None, scale=1.0)
+    # exit()
+
+    ret_bvh = deepcopy(dst_bvh)
+    if get_dst_off_from_t:
+        ret_bvh = write_offsets_to_bvh(dst_off, ret_bvh)
     ret_bvh.filepath = ""
     return write_quaternion_to_bvh(dst_trs, dst_qua, ret_bvh, frame_time=src_bvh.frame_time)
 
