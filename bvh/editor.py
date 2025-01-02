@@ -629,7 +629,8 @@ def retarget_cr(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str],
                 dst_to_src: Dict[str, str],
                 src_t=None, dst_t=None, 
                 dst_head: str=None,
-                get_dst_off_from_t=True) -> BVH:
+                get_dst_off_from_t=True,
+                foot_placement=False) -> BVH:
     """retarget a motion from src_bvh to dst_bvh by copy rotations, given a full joint mapping from dst to src
 
     Args:
@@ -646,7 +647,7 @@ def retarget_cr(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str],
     Returns:
         BVH: retargeted bvh motion file
     """
-    from ..motion_tensor.bvh_casting import get_quaternion_from_bvh, write_quaternion_to_bvh, get_t_pose_from_bvh, get_offsets_from_bvh, write_offsets_to_bvh
+    from ..motion_tensor.bvh_casting import get_quaternion_from_bvh, write_quaternion_to_bvh, get_t_pose_from_bvh, get_offsets_from_bvh, write_offsets_to_bvh, get_positions_from_bvh
     from ..motion_tensor.rotations import get_quat_from_pos, quaternion_to_matrix, quaternion_from_two_vectors, mul_two_quaternions, inverse_quaternion
     from ..motion_tensor.motion_process import get_feet_contacts, get_feet_grounding_shift
     from ..motion_tensor.kinematics import forward_kinematics
@@ -734,10 +735,14 @@ def retarget_cr(src_bvh: BVH, dst_bvh: BVH, dst_feet: List[str],
 
     dst_qua = mul_two_quaternions(inverse_quaternion(p_global), mul_two_quaternions(dst_qua, c_global))
 
-    # dst_fk_pos = forward_kinematics(dst_pdx, quaternion_to_matrix(dst_qua), dst_trs, dst_off)
-    # from fmbvh.visualization.cvrnd import render_pose
-    # render_pose(dst_pdx, dst_fk_pos, None, scale=1.0)
-    # exit()
+    # fix foot
+    if foot_placement:
+        src_pos = get_positions_from_bvh(src_bvh)
+        K = int(1+2*((src_bvh.fps+0.5)//15))
+        fc = get_feet_contacts(src_pos, src_feet_id, src_h, kernel_size=0)
+        dst_pos = forward_kinematics(dst_pdx, quaternion_to_matrix(dst_qua), dst_trs, dst_off)
+        sft = get_feet_grounding_shift(dst_pos[dst_feet_id], fc, up_axis=1, kernel=K+4, iter_=5, gather="max")
+        dst_trs[0, 1] -= sft
 
     ret_bvh = deepcopy(dst_bvh)
     if get_dst_off_from_t:
